@@ -77,29 +77,10 @@ check:
     @which pmtiles > /dev/null && echo "✅ PMTiles CLI found" || echo "⚠️  PMTiles CLI not found"
     @which parallel > /dev/null && echo "✅ GNU Parallel found" || echo "⚠️  GNU Parallel not found (for batch processing)"
 
-# Start the Vite + MapLibre development site
-dev-site:
-    @echo "Starting Vite dev server for site (docs/)... (delegates to docs-dev)"
-    @just docs-dev
-
-# Install docs site dependencies (preferred: npm ci, fallback to npm install)
-docs-install:
-    @echo "Installing docs site dependencies (docs/)..."
-    @cd docs && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)
-    @echo "✅ docs dependencies installed"
-
-# Start Vite dev server for docs (will install if needed)
-docs-dev:
-    @echo "Starting Vite dev server in docs/..."
-    @cd docs && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run dev
-
-# Build the docs site (for GitHub Pages or static hosting)
-docs-build:
-    @echo "Building docs site (docs/) with Vite..."
-    @cd docs && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run build
-    @echo "✅ docs built: check docs/dist or configured output"
-
-# Preview the built docs site locally
-docs-preview:
-    @echo "Previewing built docs site (docs/)..."
-    @cd docs && npm run preview
+# Vite/docs recipes removed — the site is now a minimal static `docs/index.html` + `docs/index.js`.
+# To preview locally, serve the `docs/` directory with a static server, e.g.:
+#   python3 -m http.server --directory docs 5173
+# or use the convenience recipe below.
+serve-docs:
+    @echo "Serving docs/ statically on http://localhost:5173"
+    @python3 -m http.server --directory docs 5173
