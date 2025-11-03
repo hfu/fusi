@@ -3,7 +3,7 @@
 
 # Variables
 input_dir := "input"
-output_dir := "output"
+output_dir := "docs"
 
 # Default recipe
 default:
@@ -21,10 +21,10 @@ install-dev:
 
 # Clean output directory
 clean:
-    @echo "Cleaning output directory..."
-    rm -rf {{output_dir}}
+    @echo "Cleaning old output directory (remove 'output' if present) and ensure {{output_dir}} exists..."
+    rm -rf output || true
     mkdir -p {{output_dir}}
-    @echo "✅ Output directory cleaned"
+    @echo "✅ Cleaned. Docs output directory ready: {{output_dir}}"
 
 # Convert a single GeoTIFF file to PMTiles
 convert input_file output_file:
@@ -33,9 +33,8 @@ convert input_file output_file:
 
 # Convert a sample file for testing
 test-sample:
-    @echo "Testing conversion with a sample file..."
-    mkdir -p {{output_dir}}
-    pipenv run python convert.py "{{input_dir}}/$(ls {{input_dir}} | head -1)" "{{output_dir}}/sample.pmtiles"
+    @echo "Testing conversion with the largest GeoTIFF file in {{input_dir}} (Python runner)..."
+    pipenv run python scripts/test_sample.py --input {{input_dir}} --output {{output_dir}}/sample.pmtiles
 
 # Batch convert all files in input directory (parallel processing)
 batch-convert:
@@ -77,3 +76,30 @@ check:
     @which gdal2tiles.py > /dev/null && echo "✅ GDAL tools found" || echo "⚠️  GDAL tools not found"
     @which pmtiles > /dev/null && echo "✅ PMTiles CLI found" || echo "⚠️  PMTiles CLI not found"
     @which parallel > /dev/null && echo "✅ GNU Parallel found" || echo "⚠️  GNU Parallel not found (for batch processing)"
+
+# Start the Vite + MapLibre development site
+dev-site:
+    @echo "Starting Vite dev server for site (docs/)... (delegates to docs-dev)"
+    @just docs-dev
+
+# Install docs site dependencies (preferred: npm ci, fallback to npm install)
+docs-install:
+    @echo "Installing docs site dependencies (docs/)..."
+    @cd docs && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)
+    @echo "✅ docs dependencies installed"
+
+# Start Vite dev server for docs (will install if needed)
+docs-dev:
+    @echo "Starting Vite dev server in docs/..."
+    @cd docs && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run dev
+
+# Build the docs site (for GitHub Pages or static hosting)
+docs-build:
+    @echo "Building docs site (docs/) with Vite..."
+    @cd docs && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run build
+    @echo "✅ docs built: check docs/dist or configured output"
+
+# Preview the built docs site locally
+docs-preview:
+    @echo "Previewing built docs site (docs/)..."
+    @cd docs && npm run preview

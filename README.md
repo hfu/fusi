@@ -2,6 +2,12 @@
 
 日本の標高データ（GeoTIFF 約 4,500 ファイル）を PMTiles の地形タイルに変換するためのツールです。mapterhorn の方法論を踏襲し、Web Mercator（EPSG:3857）で処理します。
 
+## fusi の由来
+
+プロジェクト名の「fusi」は、mapterhorn に触発された命名の系譜にあります。mapterhorn が Matterhorn（ヨーロッパの名峰）に言及しているように、本プロジェクトは日本を象徴する山、富士（Fuji）を参照する意図を含んでいます。同時に「不死（ふし）」の語感によって、データの持続性や再利用性への願いを表しています。
+
+この表現は地理的・文化的な尊重を含むものであり、データの扱いと配布にあたっては日本の測量法および提供元の利用条件に従うことを明確にします。
+
 ## 機能
 
 - 1:1 変換（単一 GeoTIFF → 単一 PMTiles）
@@ -79,7 +85,7 @@ just check
 GeoTIFF 1 ファイルを PMTiles に変換します。
 
 ```bash
-just convert input/FG-GML-4930-02-28-DEM1A-20250515.tif output/sample.pmtiles
+just convert input/FG-GML-4930-02-28-DEM1A-20250515.tif docs/sample.pmtiles
 ```
 
 ### サンプル変換（動作確認）
@@ -115,7 +121,7 @@ just check                     # システム依存関係の確認
 ```text
 fusi/
 ├── input/                    # GeoTIFF ファイル（~4500 ファイル）
-├── output/                   # 生成される PMTiles
+├── docs/                     # 生成される PMTiles と静的サイト（Vite + MapLibre）
 ├── convert.py                # 変換スクリプト本体
 ├── Pipfile                   # Python 依存関係
 ├── justfile                  # タスク自動化
