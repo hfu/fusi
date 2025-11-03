@@ -1,0 +1,13 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+rasterio = ">=1.4.1"
+gdal = ">=3.9.0"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
