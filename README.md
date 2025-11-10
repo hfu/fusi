@@ -147,6 +147,8 @@ fusi/
 ## ロードマップ
 
 - [x] 基本の 1:1 変換（GeoTIFF → PMTiles）
+- [x] rio-rgbify による Terrain-RGB エンコーディング
+- [ ] GeoTIFF ファイルの矩形（bounds）算出機能の追加（mapterhorn から取り入れ）
 - [ ] Aggregation パイプライン（複数入力 → 単一出力）
 - [ ] 概観レベル向けダウンサンプリング
 - [ ] 配布向けバンドル生成
