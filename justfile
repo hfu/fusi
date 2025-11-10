@@ -1,79 +1,44 @@
 # Justfile for fusi - Japanese elevation data to PMTiles converter
-# Install just: https://github.com/casey/just
+#
+# Pipeline: GeoTIFF (elevation) → rio-rgbify (Terrain-RGB MBTiles) → pmtiles (PMTiles)
+# rio-rgbify handles: reprojection to EPSG:3857, RGB encoding, and MBTiles generation
+# pmtiles handles: MBTiles to PMTiles conversion only
 
-# Variables
 input_dir := "input"
 output_dir := "output"
 
-# Default recipe
 default:
     @just --list
 
-# Install dependencies using pipenv
+# 1. Setup: Install dependencies
 install:
-    @echo "Installing dependencies with pipenv..."
     pipenv install
-    @echo "✅ Dependencies installed"
 
-# Install development dependencies
-install-dev:
-    pipenv install --dev
-
-# Clean output directory
-clean:
-    @echo "Cleaning output directory..."
-    rm -rf {{output_dir}}
-    mkdir -p {{output_dir}}
-    @echo "✅ Output directory cleaned"
-
-# Convert a single GeoTIFF file to PMTiles
-convert input_file output_file:
-    @echo "Converting {{input_file}} to {{output_file}}"
-    pipenv run python convert.py "{{input_file}}" "{{output_file}}"
-
-# Convert a sample file for testing
-test-sample:
-    @echo "Testing conversion with a sample file..."
-    mkdir -p {{output_dir}}
-    pipenv run python convert.py "{{input_dir}}/$(ls {{input_dir}} | head -1)" "{{output_dir}}/sample.pmtiles"
-
-# Batch convert all files in input directory (parallel processing)
-batch-convert:
-    @echo "Starting batch conversion of all GeoTIFF files..."
-    mkdir -p {{output_dir}}
-    find {{input_dir}} -name "*.tif" | parallel pipenv run python convert.py {} {{output_dir}}/{/.}.pmtiles
-
-# Count input files
-count-files:
-    @echo "Counting GeoTIFF files in input directory..."
-    @find {{input_dir}} -name "*.tif" | wc -l
-
-# Show file size statistics
-stats:
-    @echo "Input directory statistics:"
-    @du -h {{input_dir}} | tail -1
-    @echo "Number of .tif files:"
-    @find {{input_dir}} -name "*.tif" | wc -l
-    @if [ -d "{{output_dir}}" ]; then \
-        echo "Output directory statistics:"; \
-        du -h {{output_dir}} | tail -1; \
-        echo "Number of .pmtiles files:"; \
-        find {{output_dir}} -name "*.pmtiles" | wc -l; \
-    fi
-
-# Setup development environment
 setup: install
-    @echo "Setting up development environment..."
-    @echo "Checking for required tools..."
-    @which gdal2tiles.py > /dev/null || echo "⚠️  gdal2tiles.py not found - install GDAL tools"
-    @which pmtiles > /dev/null || echo "⚠️  pmtiles CLI not found - install from https://github.com/protomaps/go-pmtiles"
-    @echo "✅ Development environment ready"
+    @which pmtiles > /dev/null || echo "⚠️  Install pmtiles: https://github.com/protomaps/go-pmtiles"
+    @which parallel > /dev/null || echo "⚠️  Install parallel for batch processing"
 
-# Check dependencies and tools
-check:
-    @echo "Checking system dependencies..."
-    @which python3 > /dev/null && echo "✅ Python3 found" || echo "❌ Python3 not found"
-    @which pipenv > /dev/null && echo "✅ Pipenv found" || echo "❌ Pipenv not found"  
-    @which gdal2tiles.py > /dev/null && echo "✅ GDAL tools found" || echo "⚠️  GDAL tools not found"
-    @which pmtiles > /dev/null && echo "✅ PMTiles CLI found" || echo "⚠️  PMTiles CLI not found"
-    @which parallel > /dev/null && echo "✅ GNU Parallel found" || echo "⚠️  GNU Parallel not found (for batch processing)"
+# 2. Convert: Single file (GeoTIFF → Terrain-RGB PMTiles)
+convert input_file output_file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "$(dirname "{{output_file}}")"
+    output="{{output_file}}"
+    mbtiles="${output%.pmtiles}.mbtiles"
+    pipenv run rio rgbify "{{input_file}}" "$mbtiles" --min-z 0 --max-z 15 --format mbtiles
+    pmtiles convert "$mbtiles" "{{output_file}}"
+    rm -f "$mbtiles"
+
+# 3. Test: Convert sample file
+test-sample:
+    mkdir -p {{output_dir}}
+    just convert "{{input_dir}}/$(ls {{input_dir}} | head -1)" "{{output_dir}}/sample.pmtiles"
+
+# 4. Batch: Convert all files (parallel processing)
+batch-convert:
+    mkdir -p {{output_dir}}
+    find -L {{input_dir}} -name "*.tif" | parallel just convert {} {{output_dir}}/{/.}.pmtiles
+
+# 5. Clean: Remove output directory
+clean:
+    rm -rf {{output_dir}}
