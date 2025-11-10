@@ -25,7 +25,7 @@ convert input_file output_file:
     mkdir -p "$(dirname "{{output_file}}")"
     output="{{output_file}}"
     mbtiles="${output%.pmtiles}.mbtiles"
-    pipenv run rio rgbify "{{input_file}}" "$mbtiles" --min-z 0 --max-z 15 --format mbtiles
+    pipenv run rio rgbify "{{input_file}}" "$mbtiles" --min-z 0 --max-z 15 --format webp
     pmtiles convert "$mbtiles" "{{output_file}}"
     rm -f "$mbtiles"
 
