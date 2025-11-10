@@ -37,7 +37,7 @@ test-sample:
 # 4. Batch: Convert all files (parallel processing)
 batch-convert:
     mkdir -p {{output_dir}}
-    find {{input_dir}} -name "*.tif" | parallel just convert {} {{output_dir}}/{/.}.pmtiles
+    find -L {{input_dir}} -name "*.tif" | parallel just convert {} {{output_dir}}/{/.}.pmtiles
 
 # 5. Clean: Remove output directory
 clean:
