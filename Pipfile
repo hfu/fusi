@@ -4,8 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-rasterio = ">=1.4.1"
-numpy = ">=1.26"
+rio-rgbify = "*"
 
 [dev-packages]
 

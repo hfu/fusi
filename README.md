@@ -1,12 +1,13 @@
 # fusi
 
-日本の標高データ（GeoTIFF 約 4,500 ファイル）を PMTiles の地形タイルに変換するためのツールです。mapterhorn の方法論を踏襲し、Web Mercator（EPSG:3857）で処理します。
+日本の標高データ（GeoTIFF 約 4,500 ファイル）を PMTiles の地形タイルに変換するためのツールです。mapterhorn の方法論を踏襲し、Mapbox Terrain-RGB エンコーディングを使用して Web Mercator（EPSG:3857）で処理します。
 
 ## 機能
 
 - 1:1 変換（単一 GeoTIFF → 単一 PMTiles）
 - バッチ処理（数千ファイルを並列実行で処理）
 - Web Mercator への自動再投影（元座標系からの reprojection）
+- Mapbox Terrain-RGB エンコーディング（mapterhorn/Mapbox 互換）
 - mapterhorn 互換のパイプライン思想
 
 ## 前提条件
@@ -14,7 +15,6 @@
 ### 必須ツール
 
 1. Python 3.11 以上（pipenv 利用）
-1. GDAL ツール一式（gdal2tiles.py を含む）
 1. PMTiles CLI（[protomaps/go-pmtiles](https://github.com/protomaps/go-pmtiles)）
 1. GNU Parallel（任意：バッチ処理用）
 
@@ -23,9 +23,6 @@
 #### macOS（Homebrew）
 
 ```bash
-# GDAL のインストール
-brew install gdal
-
 # PMTiles CLI のインストール
 curl -LO https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles_darwin_arm64.tar.gz
 tar -xzf pmtiles_darwin_arm64.tar.gz
@@ -38,10 +35,6 @@ brew install parallel
 #### Ubuntu/Debian
 
 ```bash
-# GDAL のインストール
-sudo apt update
-sudo apt install gdal-bin python3-gdal
-
 # PMTiles CLI のインストール
 wget https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles_linux_x86_64.tar.gz
 tar -xzf pmtiles_linux_x86_64.tar.gz
@@ -103,11 +96,11 @@ just batch-convert
 ```bash
 just --list                    # コマンド一覧の表示
 just install                   # 依存関係のインストール
-just clean                     # 出力ディレクトリの掃除
-just count-files               # 入力ファイル数のカウント
-just stats                     # 入出力ディレクトリのサイズ統計
 just setup                     # 開発環境セットアップ
-just check                     # システム依存関係の確認
+just convert <input> <output>  # 単一ファイル変換
+just test-sample               # サンプル変換（動作確認）
+just batch-convert             # バッチ処理（全ファイル）
+just clean                     # 出力ディレクトリの掃除
 ```
 
 ## プロジェクト構成
@@ -116,9 +109,8 @@ just check                     # システム依存関係の確認
 fusi/
 ├── input/                    # GeoTIFF ファイル（~4500 ファイル）
 ├── output/                   # 生成される PMTiles
-├── convert.py                # 変換スクリプト本体
 ├── Pipfile                   # Python 依存関係
-├── justfile                  # タスク自動化
+├── justfile                  # タスク自動化・変換パイプライン
 ├── README.md                 # 本ファイル
 └── .gitignore                # Git 忌避設定
 ```
@@ -127,16 +119,24 @@ fusi/
 
 ### 処理パイプライン
 
-1. 入力検証：GeoTIFF の形式・メタデータを確認
-1. 再投影：Web Mercator（EPSG:3857）へ変換（bilinear resampling）
-1. タイル生成：gdal2tiles.py を用いたラスタタイル生成
-1. 形式変換：MBTiles → PMTiles（pmtiles CLI）
+**GeoTIFF (標高) → rio-rgbify (Terrain-RGB MBTiles) → go-pmtiles (PMTiles)**
+
+1. **rio-rgbify**: 標高 GeoTIFF を Mapbox Terrain-RGB 互換の RGB エンコードで MBTiles に変換
+   - エンコード式: `elevation = -10000 + (R × 256² + G × 256 + B) × 0.1`
+   - 自動的に Web Mercator (EPSG:3857) へ再投影
+2. **go-pmtiles**: MBTiles を PMTiles 形式に変換（クラウド配信最適化）
+
+### Terrain-RGB エンコーディング
+
+- Mapbox/mapterhorn 互換の標準形式
+- 3バンド RGB で標高値をエンコード（0.1m 精度）
+- 基準値: -10000m（海溝対応）
+- MapLibre GL JS など主要 Web ライブラリで利用可能
 
 ### ズームレベル
 
 - 既定レンジ：ズーム 0–15
 - 主用途：地形可視化・概観
-- バンド構成：標高の単一バンドを想定
 
 ### 性能目安
 
@@ -156,6 +156,8 @@ fusi/
 
 - [mapterhorn](https://github.com/mapterhorn/mapterhorn) — 地形タイルの方法論
 - [PMTiles](https://github.com/protomaps/PMTiles) — クラウド最適化タイル形式
+- [rio-rgbify](https://github.com/mapbox/rio-rgbify) — Terrain-RGB エンコーダ
+- [Mapbox Terrain-RGB](https://docs.mapbox.com/data/tilesets/reference/mapbox-terrain-rgb-v1/) — 仕様ドキュメント
 
 ## データのライセンスと出典
 
