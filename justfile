@@ -1,10 +1,12 @@
 # Justfile for fusi - Japanese elevation data to PMTiles converter
+# Following mapterhorn methodology with Terrarium encoding
 #
-# Pipeline: GeoTIFF (elevation) → rio-rgbify (Terrain-RGB MBTiles) → pmtiles (PMTiles)
-# rio-rgbify handles: reprojection to EPSG:3857, RGB encoding, and MBTiles generation
-# pmtiles handles: MBTiles to PMTiles conversion only
+# Pipeline: GeoTIFF → bounds.csv → Terrarium-encoded WebP tiles → PMTiles
+# Two-stage approach:
+#   1. Generate bounds.csv metadata for all GeoTIFFs
+#   2. Convert to Terrarium-encoded PMTiles with zoom-dependent vertical resolution
 
-input_dir := "input"
+source_dir := "source-store"
 output_dir := "output"
 
 default:
@@ -15,30 +17,61 @@ install:
     pipenv install
 
 setup: install
-    @which pmtiles > /dev/null || echo "⚠️  Install pmtiles: https://github.com/protomaps/go-pmtiles"
-    @which parallel > /dev/null || echo "⚠️  Install parallel for batch processing"
+    @echo "Setup complete. Dependencies installed."
 
-# 2. Convert: Single file (GeoTIFF → Terrain-RGB PMTiles)
-convert input_file output_file:
+# 2. Bounds: Generate bounds.csv for a source
+bounds source_name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Generating bounds.csv for {{source_name}}..."
+    mkdir -p "{{source_dir}}/{{source_name}}"
+    pipenv run python pipelines/source_bounds.py "{{source_name}}"
+
+# 3. Convert: Single file (GeoTIFF → Terrarium PMTiles)
+convert input_file output_file min_zoom="0" max_zoom="15":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "$(dirname "{{output_file}}")"
-    output="{{output_file}}"
-    mbtiles="${output%.pmtiles}.mbtiles"
-    pipenv run rio rgbify "{{input_file}}" "$mbtiles" --min-z 0 --max-z 15 --format webp
-    pmtiles convert "$mbtiles" "{{output_file}}"
-    rm -f "$mbtiles"
+    pipenv run python pipelines/convert_terrarium.py "{{input_file}}" "{{output_file}}" \
+        --min-zoom {{min_zoom}} --max-zoom {{max_zoom}}
 
-# 3. Test: Convert sample file
-test-sample:
+# 4. Test: Convert sample file from source-store
+test-sample source_name:
+    #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p {{output_dir}}
-    just convert "{{input_dir}}/$(ls {{input_dir}} | head -1)" "{{output_dir}}/sample.pmtiles"
+    first_file=$(find -L "{{source_dir}}/{{source_name}}" -name "*.tif" | head -1)
+    if [ -z "$first_file" ]; then
+        echo "Error: No .tif files found in {{source_dir}}/{{source_name}}"
+        exit 1
+    fi
+    just convert "$first_file" "{{output_dir}}/sample.pmtiles"
 
-# 4. Batch: Convert all files (parallel processing)
-batch-convert:
+# 5. Batch: Convert all files from a source (parallel processing)
+batch-convert source_name:
+    #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p {{output_dir}}
-    find -L {{input_dir}} -name "*.tif" | parallel just convert {} {{output_dir}}/{/.}.pmtiles
+    if ! command -v parallel &> /dev/null; then
+        echo "Error: GNU Parallel not installed. Install with: brew install parallel (macOS) or sudo apt install parallel (Ubuntu)"
+        exit 1
+    fi
+    find -L "{{source_dir}}/{{source_name}}" -name "*.tif" | \
+        parallel just convert {} {{output_dir}}/{/.}.pmtiles
 
-# 5. Clean: Remove output directory
+# 6. Clean: Remove output directory
 clean:
     rm -rf {{output_dir}}
+
+# 7. Clean all: Remove output and generated bounds
+clean-all:
+    rm -rf {{output_dir}}
+    find {{source_dir}} -name "bounds.csv" -delete
+
+# 8. Check: Verify system dependencies
+check:
+    @echo "Checking dependencies..."
+    @which python3 || echo "❌ Python 3 not found"
+    @pipenv --version || echo "❌ pipenv not found"
+    @which parallel || echo "⚠️  GNU Parallel not found (optional, for batch processing)"
+    @echo "✓ Dependency check complete"

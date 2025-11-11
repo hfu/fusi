@@ -4,7 +4,11 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-rio-rgbify = "*"
+rasterio = "*"
+numpy = "*"
+mercantile = "*"
+imagecodecs = "*"
+pmtiles = "*"
 
 [dev-packages]
 
