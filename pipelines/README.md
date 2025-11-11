@@ -80,7 +80,7 @@ mapterhorn 方式に従い、ズームレベルごとに垂直解像度を 2 の
 この最適化により：
 - ファイルサイズを削減
 - 各ズームレベルで適切な精度を維持
-- 隣接ピクセル間の最小角度を約 1.5 度に統一
+- 隣接ピクセル間の最小傾斜角度（slope angle）を約 1.5 度に統一（[mapterhorn 仕様](https://github.com/consbio/mapterhorn#vertical-resolution) 参照）
 
 ## Mapbox Terrain-RGB との比較
 
