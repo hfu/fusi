@@ -204,32 +204,45 @@ def create_pmtiles(tiles_generator, output_path):
         
         tile_count = 0
         
-        # Collect and sort tiles
-        tiles_data = []
-        for z, x, y, webp_data in tiles_generator:
-            tile_id = zxy_to_tileid(z=z, x=x, y=y)
-            tiles_data.append((tile_id, webp_data))
-            
-            # Update bounds
-            max_z = max(max_z, z)
-            min_z = min(min_z, z)
-            bounds = mercantile.bounds(x, y, z)
-            min_lon = min(min_lon, bounds.west)
-            min_lat = min(min_lat, bounds.south)
-            max_lon = max(max_lon, bounds.east)
-            max_lat = max(max_lat, bounds.north)
-            
-            tile_count += 1
-        
+        # Stream tiles to a temporary file to avoid loading all into memory
+        import pickle
+        with tempfile.NamedTemporaryFile(delete=False) as tmpfile:
+            tmpfile_path = tmpfile.name
+            for z, x, y, webp_data in tiles_generator:
+                tile_id = zxy_to_tileid(z=z, x=x, y=y)
+                # Write a tuple (tile_id, webp_data) to the temp file
+                pickle.dump((tile_id, webp_data), tmpfile)
+
+                # Update bounds
+                max_z = max(max_z, z)
+                min_z = min(min_z, z)
+                bounds = mercantile.bounds(x, y, z)
+                min_lon = min(min_lon, bounds.west)
+                min_lat = min(min_lat, bounds.south)
+                max_lon = max(max_lon, bounds.east)
+                max_lat = max(max_lat, bounds.north)
+
+                tile_count += 1
+
         print(f'Writing {tile_count} tiles to PMTiles...')
-        
+
+        # Read tiles from temp file, sort by tile_id, and write to PMTiles
+        tiles_iter = []
+        with open(tmpfile_path, 'rb') as tmpfile:
+            try:
+                while True:
+                    tile_id, webp_data = pickle.load(tmpfile)
+                    tiles_iter.append((tile_id, webp_data))
+            except EOFError:
+                pass
+        # Remove the temp file
+        import os
+        os.remove(tmpfile_path)
         # Sort by tile_id for efficient PMTiles structure
-        tiles_data.sort(key=lambda x: x[0])
-        
+        tiles_iter.sort(key=lambda x: x[0])
         # Write tiles
-        for tile_id, webp_data in tiles_data:
+        for tile_id, webp_data in tiles_iter:
             writer.write_tile(tile_id, webp_data)
-        
         # Finalize with metadata
         min_lon_e7 = int(min_lon * 1e7)
         min_lat_e7 = int(min_lat * 1e7)
