@@ -14,7 +14,6 @@ import sys
 import argparse
 import math
 import tempfile
-import shutil
 from pathlib import Path
 
 import numpy as np
