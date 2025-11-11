@@ -1,3 +1,7 @@
+source-store
+source-store/
+output/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -42,6 +42,24 @@ pipenv run python pipelines/convert_terrarium.py <input_tif> <output_pmtiles> [-
 4. Lossless WebP としてエンコード
 5. PMTiles 形式でパッケージ化
 
+### 3. aggregate_pmtiles.py
+
+`bounds.csv` を参照して複数の GeoTIFF を統合し、1 つの Terrarium PMTiles を生成します。
+
+**使用方法:**
+
+```bash
+pipenv run python pipelines/aggregate_pmtiles.py <source_name> <output_pmtiles> \
+  [--min-zoom MIN] [--max-zoom MAX] [--bbox WEST SOUTH EAST NORTH]
+```
+
+**主な機能:**
+
+- `bounds.csv` の範囲情報を用いて対象ファイルを自動選別
+- 出力タイルごとに必要な GeoTIFF をオンデマンドでモザイク
+- 指定した緯度経度範囲のみを切り出して書き出し可能
+- `just aggregate` からパイプラインとして実行できる
+
 ## Terrarium エンコーディング
 
 ### エンコード式
@@ -78,6 +96,7 @@ mapterhorn 方式に従い、ズームレベルごとに垂直解像度を 2 の
 | 19     | 0.0039 m  | 0.149 m            |
 
 この最適化により：
+
 - ファイルサイズを削減
 - 各ズームレベルで適切な精度を維持
 - 隣接ピクセル間の最小傾斜角度（slope angle）を約 1.5 度に統一（[mapterhorn 仕様](https://github.com/consbio/mapterhorn#vertical-resolution) 参照）
@@ -94,6 +113,7 @@ mapterhorn 方式に従い、ズームレベルごとに垂直解像度を 2 の
 | 垂直解像度 | ズーム依存 | 固定 (0.1m) |
 
 Terrarium は以下の利点があります：
+
 - より広い標高範囲（-32768m ～ +32767m）
 - ズームレベルに応じた最適化によるファイルサイズ削減
 - mapterhorn との互換性
