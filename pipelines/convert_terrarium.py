@@ -312,21 +312,27 @@ def main():
                     dst.write(mem_src.read())
             
             processing_path = tmp_path
+            try:
+                # Step 2: Generate tiles
+                print('Step 2: Generating tiles with Terrarium encoding...')
+                tiles_gen = generate_tiles(processing_path, args.min_zoom, args.max_zoom)
+                
+                # Step 3: Create PMTiles
+                print('Step 3: Creating PMTiles archive...')
+                create_pmtiles(tiles_gen, output_path)
+            finally:
+                # Cleanup temporary file
+                Path(processing_path).unlink()
         else:
             print('  Already in EPSG:3857')
             processing_path = str(input_path)
-    
-    # Step 2: Generate tiles
-    print('Step 2: Generating tiles with Terrarium encoding...')
-    tiles_gen = generate_tiles(processing_path, args.min_zoom, args.max_zoom)
-    
-    # Step 3: Create PMTiles
-    print('Step 3: Creating PMTiles archive...')
-    create_pmtiles(tiles_gen, output_path)
-    
-    # Cleanup temporary file
-    if processing_path != str(input_path):
-        Path(processing_path).unlink()
+            # Step 2: Generate tiles
+            print('Step 2: Generating tiles with Terrarium encoding...')
+            tiles_gen = generate_tiles(processing_path, args.min_zoom, args.max_zoom)
+            
+            # Step 3: Create PMTiles
+            print('Step 3: Creating PMTiles archive...')
+            create_pmtiles(tiles_gen, output_path)
     
     print('Conversion complete!')
 
