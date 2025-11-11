@@ -121,6 +121,8 @@ just batch-convert <source_name>         # バッチ処理（全ファイル）
 just clean                               # 出力ディレクトリの掃除
 just clean-all                           # 出力と bounds.csv の削除
 just check                               # システム依存関係の確認
+just config                              # 現在の設定を表示
+just inspect <pmtiles_file>              # PMTiles ファイルのメタデータを表示
 ```
 
 ## プロジェクト構成

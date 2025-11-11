@@ -75,3 +75,17 @@ check:
     @pipenv --version || echo "❌ pipenv not found"
     @which parallel || echo "⚠️  GNU Parallel not found (optional, for batch processing)"
     @echo "✓ Dependency check complete"
+
+# 9. Config: Show current configuration
+config:
+    @echo "=== Fusi Configuration ==="
+    @echo "Source directory: {{source_dir}}"
+    @echo "Output directory: {{output_dir}}"
+    @echo "Default zoom: 0-15"
+    @echo "Encoding: Terrarium (mapterhorn compatible)"
+    @echo "Tile format: Lossless WebP"
+    @echo "Tile size: 512×512 pixels"
+
+# 10. Inspect: Show PMTiles metadata
+inspect pmtiles_file:
+    pipenv run python pipelines/inspect_pmtiles.py "{{pmtiles_file}}"
