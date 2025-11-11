@@ -37,10 +37,14 @@ output/
 *.pmtiles
 *.mbtiles
 
+# Source data (can be large)
+source-store/*/
+
 # Temporary files
 *.tmp
 *.temp
 temp/
+.tmp/
 
 # macOS
 .DS_Store
@@ -53,9 +57,6 @@ temp/
 
 # Logs
 *.log
-
-# Large data files (keep input directory but ignore specific large files if needed)
-# input/ (uncomment if you want to ignore input files)
 
 # Testing
 test_output/

@@ -1,21 +1,22 @@
 # fusi
 
-日本の標高データ（GeoTIFF 約 4,500 ファイル）を PMTiles の地形タイルに変換するためのツールです。mapterhorn の方法論を踏襲し、Mapbox Terrain-RGB エンコーディングを使用して Web Mercator（EPSG:3857）で処理します。
+日本の標高データ（GeoTIFF 約 4,500 ファイル）を PMTiles の地形タイルに変換するためのツールです。mapterhorn の方法論を踏襲し、Terrarium エンコーディングを使用して Web Mercator（EPSG:3857）で処理します。
 
 ## 機能
 
-- 1:1 変換（単一 GeoTIFF → 単一 PMTiles）
-- バッチ処理（数千ファイルを並列実行で処理）
+- GeoTIFF メタデータ管理（bounds.csv 生成）
+- 2段階変換パイプライン（メタデータ生成 → タイル変換）
 - Web Mercator への自動再投影（元座標系からの reprojection）
-- Mapbox Terrain-RGB エンコーディング（mapterhorn/Mapbox 互換）
-- mapterhorn 互換のパイプライン思想
+- Terrarium エンコーディング（mapterhorn 互換）
+- ズームレベル毎の垂直解像度最適化
+- Lossless WebP タイル生成
+- バッチ処理（数千ファイルを並列実行で処理）
 
 ## 前提条件
 
 ### 必須ツール
 
 1. Python 3.11 以上（pipenv 利用）
-1. PMTiles CLI（[protomaps/go-pmtiles](https://github.com/protomaps/go-pmtiles)）
 1. GNU Parallel（任意：バッチ処理用）
 
 ### インストール
@@ -23,11 +24,6 @@
 #### macOS（Homebrew）
 
 ```bash
-# PMTiles CLI のインストール
-curl -LO https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles_darwin_arm64.tar.gz
-tar -xzf pmtiles_darwin_arm64.tar.gz
-sudo mv pmtiles /usr/local/bin/
-
 # GNU Parallel のインストール
 brew install parallel
 ```
@@ -35,11 +31,6 @@ brew install parallel
 #### Ubuntu/Debian
 
 ```bash
-# PMTiles CLI のインストール
-wget https://github.com/protomaps/go-pmtiles/releases/latest/download/pmtiles_linux_x86_64.tar.gz
-tar -xzf pmtiles_linux_x86_64.tar.gz
-sudo mv pmtiles /usr/local/bin/
-
 # GNU Parallel のインストール
 sudo apt install parallel
 ```
@@ -67,99 +58,172 @@ just check
 
 ## 使い方
 
-### 単一ファイルの変換
+### ソースデータの準備
+
+GeoTIFF ファイルを `source-store/<source_name>/` ディレクトリに配置します。
+
+```bash
+mkdir -p source-store/japan_dem
+# GeoTIFFファイルをコピー
+cp /path/to/geotiffs/*.tif source-store/japan_dem/
+```
+
+### ステップ1: Bounds.csv 生成
+
+各 GeoTIFF のバウンディングボックスとメタデータを抽出します。
+
+```bash
+just bounds japan_dem
+```
+
+これにより `source-store/japan_dem/bounds.csv` が生成されます。
+
+### ステップ2: 単一ファイルの変換
 
 GeoTIFF 1 ファイルを PMTiles に変換します。
 
 ```bash
-just convert input/FG-GML-4930-02-28-DEM1A-20250515.tif output/sample.pmtiles
+just convert source-store/japan_dem/sample.tif output/sample.pmtiles
+```
+
+ズームレベルを指定する場合：
+
+```bash
+just convert source-store/japan_dem/sample.tif output/sample.pmtiles 0 15
 ```
 
 ### サンプル変換（動作確認）
 
-input ディレクトリの先頭ファイルを使って簡易テストを実行します。
+source-store 内の先頭ファイルを使って簡易テストを実行します。
 
 ```bash
-just test-sample
+just test-sample japan_dem
 ```
 
 ### バッチ処理（全ファイル）
 
-input ディレクトリ内のすべての GeoTIFF を PMTiles に変換します。
+source-store 内のすべての GeoTIFF を PMTiles に変換します。
 
 ```bash
-just batch-convert
+just batch-convert japan_dem
 ```
 
 ### 利用可能なコマンド一覧
 
 ```bash
-just --list                    # コマンド一覧の表示
-just install                   # 依存関係のインストール
-just setup                     # 開発環境セットアップ
-just convert <input> <output>  # 単一ファイル変換
-just test-sample               # サンプル変換（動作確認）
-just batch-convert             # バッチ処理（全ファイル）
-just clean                     # 出力ディレクトリの掃除
+just --list                              # コマンド一覧の表示
+just install                             # 依存関係のインストール
+just setup                               # 開発環境セットアップ
+just bounds <source_name>                # bounds.csv 生成
+just convert <input> <output> [min] [max] # 単一ファイル変換
+just test-sample <source_name>           # サンプル変換（動作確認）
+just batch-convert <source_name>         # バッチ処理（全ファイル）
+just clean                               # 出力ディレクトリの掃除
+just clean-all                           # 出力と bounds.csv の削除
+just check                               # システム依存関係の確認
+just config                              # 現在の設定を表示
+just inspect <pmtiles_file>              # PMTiles ファイルのメタデータを表示
 ```
 
 ## プロジェクト構成
 
 ```text
 fusi/
-├── input/                    # GeoTIFF ファイル（~4500 ファイル）
-├── output/                   # 生成される PMTiles
-├── Pipfile                   # Python 依存関係
-├── justfile                  # タスク自動化・変換パイプライン
-├── README.md                 # 本ファイル
-└── .gitignore                # Git 忌避設定
+├── source-store/             # ソースデータ管理
+│   └── <source_name>/       # ソース毎のディレクトリ
+│       ├── *.tif            # GeoTIFF ファイル（~4500 ファイル）
+│       └── bounds.csv       # バウンディングボックスメタデータ
+├── output/                  # 生成される PMTiles
+├── pipelines/               # 変換パイプライン
+│   ├── source_bounds.py    # bounds.csv 生成スクリプト
+│   └── convert_terrarium.py # Terrarium 変換スクリプト
+├── Pipfile                  # Python 依存関係
+├── justfile                 # タスク自動化
+└── README.md                # 本ファイル
 ```
 
 ## 技術詳細
 
 ### 処理パイプライン
 
-**GeoTIFF (標高) → rio-rgbify (Terrain-RGB MBTiles) → go-pmtiles (PMTiles)**
+**2段階方式：メタデータ管理 + タイル変換**
 
-1. **rio-rgbify**: 標高 GeoTIFF を Mapbox Terrain-RGB 互換の RGB エンコードで MBTiles に変換
-   - エンコード式: `elevation = -10000 + (R × 256² + G × 256 + B) × 0.1`
-   - 自動的に Web Mercator (EPSG:3857) へ再投影
-2. **go-pmtiles**: MBTiles を PMTiles 形式に変換（クラウド配信最適化）
+#### ステージ1: メタデータ生成 (bounds.csv)
 
-### Terrain-RGB エンコーディング
+- 全 GeoTIFF について EPSG:3857 でのバウンディングボックスを抽出
+- ピクセルサイズと解像度を記録
+- CSV 形式で管理（mapterhorn 互換）
 
-- Mapbox/mapterhorn 互換の標準形式
-- 3バンド RGB で標高値をエンコード（0.1m 精度）
-- 基準値: -10000m（海溝対応）
-- MapLibre GL JS など主要 Web ライブラリで利用可能
+#### ステージ2: タイル変換
+
+1. **Reprojection**: GeoTIFF を Web Mercator (EPSG:3857) へ再投影
+2. **Tiling**: 512×512 ピクセル単位でタイル切り出し
+3. **Terrarium Encoding**: 標高値を RGB にエンコード
+4. **WebP Encoding**: Lossless WebP として保存
+5. **PMTiles Packaging**: PMTiles 形式にアーカイブ
+
+### Terrarium エンコーディング
+
+mapterhorn 互換の Terrarium 形式を採用：
+
+- **基本式**: `elevation = (R × 256 + G + B / 256) - 32768`
+- **オフセット**: -32768m（海溝対応）
+- **最大解像度**: 1/256 m ≈ 3.9 mm（ズーム19）
+- **垂直解像度の最適化**: ズームレベル毎に 2 のべき乗で丸め
+
+#### ズームレベル別垂直解像度
+
+| ズーム | ピクセルサイズ (3857) | 垂直解像度 |
+|--------|---------------------|----------|
+| 0      | 78.3 km            | 2048 m   |
+| 5      | 2.45 km            | 64 m     |
+| 10     | 76.4 m             | 2 m      |
+| 11     | 38.2 m             | 1 m      |
+| 12     | 19.1 m             | 50 cm    |
+| 15     | 2.39 m             | 6.3 cm   |
+| 19     | 0.149 m            | 3.9 mm   |
+
+この最適化により、全ズームレベルで隣接ピクセル間の最小傾斜角（標高差から計算される最小の斜面角度）を一定（約1.5度）に保ちます。  
+（*この「最小角度」は、隣接ピクセル間で表現可能な最小の傾斜角を指し、地形の細部表現の一貫性を保つための設計です。詳しくは [mapterhorn の解説](https://github.com/consbio/mapterhorn#vertical-resolution) も参照してください。*）
+
+### Mapbox Terrain-RGB との違い
+
+| 項目 | Terrarium (fusi) | Mapbox Terrain-RGB |
+|------|------------------|-------------------|
+| オフセット | +32768 | +10000 |
+| 基準値 | -32768m | -10000m |
+| 最大解像度 | 1/256 m (3.9 mm) | 0.1 m |
+| デコード式 | `(R×256+G+B/256)-32768` | `(R×256²+G×256+B)×0.1-10000` |
+| 互換性 | mapterhorn | Mapbox/MapLibre |
 
 ### ズームレベル
 
 - 既定レンジ：ズーム 0–15
+- カスタマイズ可能：`just convert` コマンドで指定
 - 主用途：地形可視化・概観
 
 ### 性能目安
 
 - 単一ファイル：1–3 分程度（サイズ依存）
 - バッチ処理：GNU Parallel による並列実行
-- 容量：PMTiles により効率的に圧縮・配布
+- 容量：Lossless WebP により効率的に圧縮
 
 ## ロードマップ
 
 - [x] 基本の 1:1 変換（GeoTIFF → PMTiles）
-- [x] rio-rgbify による Terrain-RGB エンコーディング
-- [ ] GeoTIFF ファイルの矩形（bounds）算出機能の追加（mapterhorn から取り入れ）
-- [ ] Aggregation パイプライン（複数入力 → 単一出力）
-- [ ] 概観レベル向けダウンサンプリング
+- [x] GeoTIFF ファイルの矩形（bounds）算出機能（mapterhorn 方式）
+- [x] Terrarium エンコーディング（mapterhorn 互換）
+- [x] ズームレベル別垂直解像度最適化
+- [ ] Aggregation パイプライン（複数入力 → 単一出力、ブレンド処理）
+- [ ] Downsampling パイプライン（オーバービュー生成）
 - [ ] 配布向けバンドル生成
-- [ ] 品質最適化（垂直解像度の丸め、ブレンド処理）
 
 ## 関連プロジェクト
 
-- [mapterhorn](https://github.com/mapterhorn/mapterhorn) — 地形タイルの方法論
+- [mapterhorn](https://github.com/mapterhorn/mapterhorn) — 地形タイルの方法論（本実装の参考）
 - [PMTiles](https://github.com/protomaps/PMTiles) — クラウド最適化タイル形式
-- [rio-rgbify](https://github.com/mapbox/rio-rgbify) — Terrain-RGB エンコーダ
-- [Mapbox Terrain-RGB](https://docs.mapbox.com/data/tilesets/reference/mapbox-terrain-rgb-v1/) — 仕様ドキュメント
+- [pmtiles-python](https://github.com/protomaps/PMTiles/tree/main/python) — PMTiles Python ライブラリ
+- [Mapbox Terrain-RGB](https://docs.mapbox.com/data/tilesets/reference/mapbox-terrain-rgb-v1/) — 別のエンコーディング方式
 
 ## データのライセンスと出典
 
