@@ -201,7 +201,7 @@ def read_tile_from_source(
         filled = data.filled(np.nan).astype(np.float32)
         nodata = dataset.nodata
         if nodata is not None and not math.isnan(nodata):
-            filled = np.where(np.isclose(filled, nodata, equal_nan=True), np.nan, filled)
+            filled = np.where(np.isclose(filled, nodata), np.nan, filled)
 
         return filled
 
