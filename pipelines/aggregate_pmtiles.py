@@ -34,8 +34,8 @@ import mercantile
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
-from rasterio.vrt import WarpedVRT
-from rasterio.warp import transform_bounds
+from rasterio.transform import from_bounds as transform_from_bounds
+from rasterio.warp import transform_bounds, reproject
 
 try:  # Allow running as a module or script
     from .convert_terrarium import create_pmtiles, encode_terrarium
@@ -44,6 +44,11 @@ except ImportError:  # pragma: no cover - fallback for direct execution
 
 EPSG_4326 = "EPSG:4326"
 EPSG_3857 = "EPSG:3857"
+
+EARTH_CIRCUMFERENCE_M = 40075016.68557849
+REFERENCE_TILE_SIZE = 512
+BASE_RESOLUTION_M = EARTH_CIRCUMFERENCE_M / REFERENCE_TILE_SIZE
+MAX_SUPPORTED_ZOOM = 17
 
 
 @dataclass(frozen=True)
@@ -72,7 +77,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("source_name", help="Name of the source directory under source-store/")
     parser.add_argument("output", help="Output PMTiles path")
     parser.add_argument("--min-zoom", type=int, default=0, help="Minimum zoom level")
-    parser.add_argument("--max-zoom", type=int, default=15, help="Maximum zoom level")
+    parser.add_argument(
+        "--max-zoom",
+        type=int,
+        default=None,
+        help="Maximum zoom level (defaults to auto based on source resolution)",
+    )
     parser.add_argument(
         "--bbox",
         nargs=4,
@@ -88,12 +98,19 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
 
-    if args.min_zoom < 0 or args.max_zoom < 0:
+    if args.min_zoom < 0 or (args.max_zoom is not None and args.max_zoom < 0):
         parser.error("Zoom levels must be non-negative")
-    if args.min_zoom > args.max_zoom:
+    if args.max_zoom is not None and args.min_zoom > args.max_zoom:
         parser.error("min_zoom cannot be larger than max_zoom")
 
     return args
+
+
+def recommended_max_zoom(pixel_size_m: float) -> int:
+    if not math.isfinite(pixel_size_m) or pixel_size_m <= 0:
+        return MAX_SUPPORTED_ZOOM
+    zoom = math.ceil(math.log2(BASE_RESOLUTION_M / pixel_size_m))
+    return max(0, min(MAX_SUPPORTED_ZOOM, zoom))
 
 
 def load_bounds(source_name: str) -> List[SourceRecord]:
@@ -173,50 +190,40 @@ def read_tile_from_source(
     tile_bounds_mercator: mercantile.TileBoundingBox,
     out_shape: Tuple[int, int],
 ) -> Optional[np.ndarray]:
-    """Sample the GeoTIFF over the requested tile and return float32 elevations."""
+    """Reproject the raster onto the requested tile grid and return float32 elevations."""
 
-    def _read(dataset: rasterio.io.DatasetReader) -> Optional[np.ndarray]:
-        window = dataset.window(
-            tile_bounds_mercator.left,
-            tile_bounds_mercator.bottom,
-            tile_bounds_mercator.right,
-            tile_bounds_mercator.top,
-            boundless=True,
-        )
-        if window.width <= 0 or window.height <= 0:
-            return None
-
-        data = dataset.read(
-            1,
-            window=window,
-            out_shape=out_shape,
-            boundless=True,
-            resampling=Resampling.bilinear,
-            masked=True,
-        )
-
-        if data.mask.all():
-            return None
-
-        filled = data.filled(np.nan).astype(np.float32)
-        nodata = dataset.nodata
-        if nodata is not None and not math.isnan(nodata):
-            filled = np.where(np.isclose(filled, nodata), np.nan, filled)
-
-        return filled
+    height, width = out_shape
+    tile_transform = transform_from_bounds(
+        tile_bounds_mercator.left,
+        tile_bounds_mercator.bottom,
+        tile_bounds_mercator.right,
+        tile_bounds_mercator.top,
+        width,
+        height,
+    )
 
     with rasterio.open(record.path) as src:
         if src.crs is None:
             raise ValueError(f"CRS not defined for {record.path}")
 
-        if src.crs.to_string() != EPSG_3857:
-            vrt_options = {
-                "crs": EPSG_3857,
-                "resampling": Resampling.bilinear,
-            }
-            with WarpedVRT(src, **vrt_options) as vrt:
-                return _read(vrt)
-        return _read(src)
+        destination = np.full(out_shape, np.nan, dtype=np.float32)
+
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=destination,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=tile_transform,
+            dst_crs=EPSG_3857,
+            resampling=Resampling.bilinear,
+            src_nodata=src.nodata,
+            dst_nodata=np.nan,
+        )
+
+        if np.isnan(destination).all():
+            return None
+
+        return destination
 
 
 def merge_tile_candidates(candidates: Iterable[np.ndarray]) -> Optional[np.ndarray]:
@@ -318,8 +325,6 @@ def generate_aggregated_tiles(
             if merged is None or np.isnan(merged).all():
                 continue
 
-            merged = np.nan_to_num(merged, nan=0.0)
-
             try:
                 rgb = encode_terrarium(merged, z)
                 webp = imagecodecs.webp_encode(rgb, lossless=True)
@@ -342,6 +347,21 @@ def main() -> None:
     records = load_bounds(args.source_name)
     print(f"Loaded metadata for {len(records)} GeoTIFF files")
 
+    finest_pixel_size = min(r.pixel_size for r in records)
+    auto_max_zoom = recommended_max_zoom(finest_pixel_size)
+    max_zoom = args.max_zoom if args.max_zoom is not None else auto_max_zoom
+    if max_zoom > MAX_SUPPORTED_ZOOM:
+        raise ValueError(f"Requested max_zoom {max_zoom} exceeds supported maximum {MAX_SUPPORTED_ZOOM}")
+    if max_zoom < args.min_zoom:
+        raise ValueError("Computed max_zoom is smaller than min_zoom; adjust inputs")
+
+    if args.max_zoom is None:
+        print(
+            f"Auto-selected max zoom {max_zoom} for source GSD ≈ {finest_pixel_size:.2f} m (tile size {REFERENCE_TILE_SIZE}px)"
+        )
+    else:
+        print(f"Using max zoom {max_zoom} (user-specified)")
+
     bbox = tuple(args.bbox) if args.bbox else None
 
     output_path = Path(args.output)
@@ -350,7 +370,7 @@ def main() -> None:
     tiles = generate_aggregated_tiles(
         records=records,
         min_zoom=args.min_zoom,
-        max_zoom=args.max_zoom,
+        max_zoom=max_zoom,
         bbox_wgs84=bbox,
         progress_interval=args.progress_interval,
     )

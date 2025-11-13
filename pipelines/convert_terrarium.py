@@ -25,6 +25,11 @@ import imagecodecs
 from pmtiles.tile import zxy_to_tileid, TileType, Compression
 from pmtiles.writer import Writer
 
+EARTH_CIRCUMFERENCE_M = 40075016.68557849
+REFERENCE_TILE_SIZE = 512
+BASE_RESOLUTION_M = EARTH_CIRCUMFERENCE_M / REFERENCE_TILE_SIZE
+MAX_SUPPORTED_ZOOM = 17
+
 
 def get_vertical_resolution(z):
     """
@@ -38,6 +43,13 @@ def get_vertical_resolution(z):
     full_resolution_zoom = 19
     factor = 2 ** (full_resolution_zoom - z) / 256
     return factor
+
+
+def recommended_max_zoom(pixel_size_m):
+    if not math.isfinite(pixel_size_m) or pixel_size_m <= 0:
+        return MAX_SUPPORTED_ZOOM
+    zoom = math.ceil(math.log2(BASE_RESOLUTION_M / pixel_size_m))
+    return max(0, min(MAX_SUPPORTED_ZOOM, zoom))
 
 
 def encode_terrarium(data, z):
@@ -58,19 +70,30 @@ def encode_terrarium(data, z):
     Returns:
         RGB numpy array of shape (512, 512, 3) with uint8 dtype
     """
-    # Apply zoom-level specific vertical resolution rounding
+    nodata_mask = np.isnan(data)
+
+    # Apply zoom-level specific vertical resolution rounding only to valid data
     factor = get_vertical_resolution(z)
-    data = np.round(data / factor) * factor
-    
-    # Offset for terrarium encoding
-    data_offset = data + 32768
-    
+    rounded = np.full(data.shape, -32768.0, dtype=np.float64)
+    valid = ~nodata_mask
+    if np.any(valid):
+        rounded[valid] = np.round(data[valid] / factor) * factor
+
+    # Offset for terrarium encoding (Terrarium nodata defaults to -32768m → RGB 0/0/0)
+    data_offset = rounded + 32768.0
+
     # Encode to RGB
     rgb = np.zeros((512, 512, 3), dtype=np.uint8)
-    rgb[..., 0] = np.clip(data_offset // 256, 0, 255).astype(np.uint8)
-    rgb[..., 1] = np.clip(data_offset % 256, 0, 255).astype(np.uint8)
-    rgb[..., 2] = np.clip((data_offset - np.floor(data_offset)) * 256, 0, 255).astype(np.uint8)
-    
+    if np.any(valid):
+        rgb_valid = rgb[valid]
+        offset_valid = data_offset[valid]
+        rgb_valid[..., 0] = np.clip(offset_valid // 256, 0, 255).astype(np.uint8)
+        rgb_valid[..., 1] = np.clip(offset_valid % 256, 0, 255).astype(np.uint8)
+        fractional = (offset_valid - np.floor(offset_valid)) * 256
+        rgb_valid[..., 2] = np.clip(fractional, 0, 255).astype(np.uint8)
+        rgb[valid] = rgb_valid
+
+    # Nodata remains RGB(0,0,0) by construction
     return rgb
 
 
@@ -160,15 +183,12 @@ def generate_tiles(src_path, min_zoom, max_zoom):
                         resampling=Resampling.bilinear
                     )
                     
-                    # Skip tiles with all nodata
+                    # Normalise nodata to NaN for downstream handling
                     if src.nodata is not None:
-                        if np.all(data == src.nodata) or np.all(np.isnan(data)):
-                            continue
-                    
-                    # Replace nodata with 0 (sea level)
-                    if src.nodata is not None:
-                        data = np.where(data == src.nodata, 0, data)
-                    data = np.nan_to_num(data, nan=0.0)
+                        data = np.where(data == src.nodata, np.nan, data)
+
+                    if np.isnan(data).all():
+                        continue
                     
                     # Encode as Terrarium
                     rgb = encode_terrarium(data, z)
@@ -279,7 +299,12 @@ def main():
     parser.add_argument('input', help='Input GeoTIFF file')
     parser.add_argument('output', help='Output PMTiles file')
     parser.add_argument('--min-zoom', type=int, default=0, help='Minimum zoom level (default: 0)')
-    parser.add_argument('--max-zoom', type=int, default=15, help='Maximum zoom level (default: 15)')
+    parser.add_argument(
+        '--max-zoom',
+        type=int,
+        default=None,
+        help='Maximum zoom level (defaults to auto based on source resolution)',
+    )
     
     args = parser.parse_args()
     
@@ -294,11 +319,12 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     print(f'Converting {input_path} to {output_path}')
-    print(f'Zoom levels: {args.min_zoom} to {args.max_zoom}')
+    print(f'Requested min zoom: {args.min_zoom}')
     print(f'Encoding: Terrarium (mapterhorn compatible)')
     
     # Step 1: Reproject to Web Mercator if needed
     print('Step 1: Checking projection...')
+    cleanup_path = None
     with rasterio.open(input_path) as src:
         if src.crs != 'EPSG:3857':
             print(f'  Reprojecting from {src.crs} to EPSG:3857...')
@@ -311,27 +337,42 @@ def main():
                     dst.write(mem_src.read())
             
             processing_path = tmp_path
-            try:
-                # Step 2: Generate tiles
-                print('Step 2: Generating tiles with Terrarium encoding...')
-                tiles_gen = generate_tiles(processing_path, args.min_zoom, args.max_zoom)
-                
-                # Step 3: Create PMTiles
-                print('Step 3: Creating PMTiles archive...')
-                create_pmtiles(tiles_gen, output_path)
-            finally:
-                # Cleanup temporary file
-                Path(processing_path).unlink()
+            cleanup_path = tmp_path
         else:
             print('  Already in EPSG:3857')
             processing_path = str(input_path)
-            # Step 2: Generate tiles
-            print('Step 2: Generating tiles with Terrarium encoding...')
-            tiles_gen = generate_tiles(processing_path, args.min_zoom, args.max_zoom)
-            
-            # Step 3: Create PMTiles
-            print('Step 3: Creating PMTiles archive...')
-            create_pmtiles(tiles_gen, output_path)
+
+    try:
+        with rasterio.open(processing_path) as working_src:
+            pixel_size_x = abs(working_src.transform.a)
+            pixel_size_y = abs(working_src.transform.e)
+            source_pixel_size = max(pixel_size_x, pixel_size_y)
+
+        max_zoom = args.max_zoom if args.max_zoom is not None else recommended_max_zoom(source_pixel_size)
+        if max_zoom > MAX_SUPPORTED_ZOOM:
+            raise ValueError(f'Requested max zoom {max_zoom} exceeds supported maximum {MAX_SUPPORTED_ZOOM}')
+        if max_zoom < args.min_zoom:
+            raise ValueError('Computed max zoom is smaller than min zoom; adjust inputs')
+
+        if args.max_zoom is None:
+            print(
+                f'Auto-selected max zoom {max_zoom} for source GSD ≈ {source_pixel_size:.2f} m (tile size {REFERENCE_TILE_SIZE}px)'
+            )
+        else:
+            print(f'Using max zoom {max_zoom} (user-specified)')
+
+        print(f'Effective zoom range: {args.min_zoom} to {max_zoom}')
+
+        # Step 2: Generate tiles
+        print('Step 2: Generating tiles with Terrarium encoding...')
+        tiles_gen = generate_tiles(processing_path, args.min_zoom, max_zoom)
+
+        # Step 3: Create PMTiles
+        print('Step 3: Creating PMTiles archive...')
+        create_pmtiles(tiles_gen, output_path)
+    finally:
+        if cleanup_path:
+            Path(cleanup_path).unlink()
     
     print('Conversion complete!')
 

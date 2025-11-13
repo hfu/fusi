@@ -28,12 +28,16 @@ bounds source_name:
     pipenv run python pipelines/source_bounds.py "{{source_name}}"
 
 # 3. Convert: Single file (GeoTIFF → Terrarium PMTiles)
-convert input_file output_file min_zoom="0" max_zoom="15":
+convert input_file output_file min_zoom="0" max_zoom="":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "$(dirname "{{output_file}}")"
+    max_zoom_arg=""
+    if [ -n "{{max_zoom}}" ]; then
+        max_zoom_arg="--max-zoom {{max_zoom}}"
+    fi
     pipenv run python pipelines/convert_terrarium.py "{{input_file}}" "{{output_file}}" \
-        --min-zoom {{min_zoom}} --max-zoom {{max_zoom}}
+        --min-zoom {{min_zoom}} ${max_zoom_arg}
 
 # 4. Test: Convert sample file from source-store
 test-sample source_name:
