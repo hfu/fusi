@@ -59,16 +59,23 @@ batch-convert source_name:
     find -L "{{source_dir}}/{{source_name}}" -name "*.tif" | \
         parallel just convert {} {{output_dir}}/{/.}.pmtiles
 
-# 6. Clean: Remove output directory
+# 6. Aggregate: Merge multiple GeoTIFFs into one PMTiles
+aggregate source_name output_file *extra_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "$(dirname "{{output_file}}")"
+    pipenv run python pipelines/aggregate_pmtiles.py "{{source_name}}" "{{output_file}}" {{extra_args}}
+
+# 7. Clean: Remove output directory
 clean:
     rm -rf {{output_dir}}
 
-# 7. Clean all: Remove output and generated bounds
+# 8. Clean all: Remove output and generated bounds
 clean-all:
     rm -rf {{output_dir}}
     find {{source_dir}} -name "bounds.csv" -delete
 
-# 8. Check: Verify system dependencies
+# 9. Check: Verify system dependencies
 check:
     @echo "Checking dependencies..."
     @which python3 || echo "❌ Python 3 not found"
@@ -76,7 +83,7 @@ check:
     @which parallel || echo "⚠️  GNU Parallel not found (optional, for batch processing)"
     @echo "✓ Dependency check complete"
 
-# 9. Config: Show current configuration
+# 10. Config: Show current configuration
 config:
     @echo "=== Fusi Configuration ==="
     @echo "Source directory: {{source_dir}}"
@@ -86,6 +93,6 @@ config:
     @echo "Tile format: Lossless WebP"
     @echo "Tile size: 512×512 pixels"
 
-# 10. Inspect: Show PMTiles metadata
+# 11. Inspect: Show PMTiles metadata
 inspect pmtiles_file:
     pipenv run python pipelines/inspect_pmtiles.py "{{pmtiles_file}}"

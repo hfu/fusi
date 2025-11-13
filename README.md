@@ -108,6 +108,16 @@ source-store 内のすべての GeoTIFF を PMTiles に変換します。
 just batch-convert japan_dem
 ```
 
+### 集約（1つの PMTiles に統合）
+
+`bounds.csv` を基に対象領域の GeoTIFF を自動選別し、単一の PMTiles にまとめます。
+
+```bash
+just aggregate japan_dem output/japan.pmtiles --min-zoom 6 --max-zoom 14
+```
+
+特定エリアのみを書き出す場合は `--bbox <西> <南> <東> <北>`（WGS84 度）を併用してください。
+
 ### 利用可能なコマンド一覧
 
 ```bash
@@ -118,6 +128,7 @@ just bounds <source_name>                # bounds.csv 生成
 just convert <input> <output> [min] [max] # 単一ファイル変換
 just test-sample <source_name>           # サンプル変換（動作確認）
 just batch-convert <source_name>         # バッチ処理（全ファイル）
+just aggregate <source_name> <output> [...] # 複数 GeoTIFF を統合して PMTiles 作成
 just clean                               # 出力ディレクトリの掃除
 just clean-all                           # 出力と bounds.csv の削除
 just check                               # システム依存関係の確認
@@ -135,8 +146,9 @@ fusi/
 │       └── bounds.csv       # バウンディングボックスメタデータ
 ├── output/                  # 生成される PMTiles
 ├── pipelines/               # 変換パイプライン
-│   ├── source_bounds.py    # bounds.csv 生成スクリプト
-│   └── convert_terrarium.py # Terrarium 変換スクリプト
+│   ├── source_bounds.py     # bounds.csv 生成スクリプト
+│   ├── convert_terrarium.py # Terrarium 変換スクリプト
+│   └── aggregate_pmtiles.py # 複数 GeoTIFF を統合して PMTiles 化
 ├── Pipfile                  # Python 依存関係
 ├── justfile                 # タスク自動化
 └── README.md                # 本ファイル
@@ -146,7 +158,7 @@ fusi/
 
 ### 処理パイプライン
 
-**2段階方式：メタデータ管理 + タイル変換**
+#### 2段階方式：メタデータ管理 + タイル変換
 
 #### ステージ1: メタデータ生成 (bounds.csv)
 
@@ -161,6 +173,12 @@ fusi/
 3. **Terrarium Encoding**: 標高値を RGB にエンコード
 4. **WebP Encoding**: Lossless WebP として保存
 5. **PMTiles Packaging**: PMTiles 形式にアーカイブ
+
+#### ステージ3 (任意): 複数タイルの集約
+
+- `bounds.csv` に基づいて対象タイルを選別
+- 必要な範囲だけを緯度経度で切り出し
+- 複数の GeoTIFF から必要な範囲を読み取り、タイルごとにモザイク処理してから Terrarium エンコードして 1 つの PMTiles にまとめる
 
 ### Terrarium エンコーディング
 
