@@ -289,12 +289,28 @@ def generate_aggregated_tiles(
         for tile in mercantile.tiles(west_r, south_r, east_r, north_r, coarse_zoom):
             buckets[(coarse_zoom, tile.x, tile.y)].append(record)
 
-    total_tiles = 0
+    per_zoom_candidate_counts: Dict[int, int] = {}
+    total_candidates = 0
+    for z in range(min_zoom, max_zoom + 1):
+        count = sum(1 for _ in mercantile.tiles(west, south, east, north, z))
+        per_zoom_candidate_counts[z] = count
+        total_candidates += count
+
+    print(
+        f"Planned tile scan: {total_candidates} candidates across zooms {min_zoom}-{max_zoom}"
+    )
+    if total_candidates:
+        detail = ", ".join(
+            f"z{z}:{per_zoom_candidate_counts[z]}" for z in range(min_zoom, max_zoom + 1)
+        )
+        print(f"  Per-zoom candidate counts: {detail}")
+
+    checked_tiles = 0
     emitted_tiles = 0
 
     for z in range(min_zoom, max_zoom + 1):
         for tile in mercantile.tiles(west, south, east, north, z):
-            total_tiles += 1
+            checked_tiles += 1
             xy_bounds = mercantile.xy_bounds(tile)
             shift = max(z - coarse_zoom, 0)
             bucket_key = (coarse_zoom, tile.x >> shift, tile.y >> shift)
@@ -333,12 +349,20 @@ def generate_aggregated_tiles(
                 continue
 
             emitted_tiles += 1
-            if progress_interval and emitted_tiles % progress_interval == 0:
-                print(f"Generated {emitted_tiles} tiles (checked {total_tiles})")
+            if progress_interval and (
+                emitted_tiles % progress_interval == 0 or checked_tiles == total_candidates
+            ):
+                percent = (checked_tiles / total_candidates * 100.0) if total_candidates else 0.0
+                print(
+                    f"Progress: {emitted_tiles} tiles written; processed {checked_tiles}/"
+                    f"{total_candidates} candidates ({percent:.1f}%)"
+                )
 
             yield z, tile.x, tile.y, webp
 
-    print(f"Finished tile generation: {emitted_tiles} tiles produced out of {total_tiles} candidates")
+    print(
+        f"Finished tile generation: {emitted_tiles} tiles produced from {checked_tiles} candidates"
+    )
 
 
 def main() -> None:
