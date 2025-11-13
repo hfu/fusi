@@ -178,7 +178,7 @@ fusi/
 
 - `bounds.csv` に基づいて対象タイルを選別
 - 必要な範囲だけを緯度経度で切り出し
-- Terrarium エンコード済みのタイルを 1 つの PMTiles にまとめる
+- 複数の GeoTIFF から必要な範囲を読み取り、タイルごとにモザイク処理してから Terrarium エンコードして 1 つの PMTiles にまとめる
 
 ### Terrarium エンコーディング
 
