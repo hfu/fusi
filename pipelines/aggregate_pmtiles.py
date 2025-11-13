@@ -266,7 +266,7 @@ def generate_aggregated_tiles(
     else:
         west, south, east, north = union_west, union_south, union_east, union_north
 
-    # Build spatial index keyed by zoom-independent tile id coarse grid (0/0/0 subdivisions)
+    # Build spatial index keyed by zoom level 5 tiles for efficient candidate filtering
     buckets: Dict[Tuple[int, int, int], List[SourceRecord]] = defaultdict(list)
     coarse_zoom = 5
     for record in records:
