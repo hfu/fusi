@@ -286,6 +286,7 @@ def create_pmtiles(tiles_generator, output_path):
                 'attribution': '国土地理院 (GSI Japan)',
                 'encoding': 'terrarium',
                 'vertical_resolution': 'zoom-dependent (mapterhorn compatible)',
+                'license': 'R 6JHs 133',
             },
         )
         

@@ -100,3 +100,14 @@ config:
 # 11. Inspect: Show PMTiles metadata
 inspect pmtiles_file:
     pipenv run python pipelines/inspect_pmtiles.py "{{pmtiles_file}}"
+
+# 12. Upload: Sync PMTiles to remote host
+upload:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{output_dir}}/fusi.pmtiles"
+    if [ ! -f "$src" ]; then
+        echo "Error: $src not found. Run just aggregate first."
+        exit 1
+    fi
+    rsync -av --progress "$src" "pod@pod.local:/home/pod/x-24b/data/"
