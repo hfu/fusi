@@ -72,28 +72,25 @@ def encode_terrarium(data, z):
     """
     nodata_mask = np.isnan(data)
 
-    # Apply zoom-level specific vertical resolution rounding only to valid data
-    factor = get_vertical_resolution(z)
-    rounded = np.full(data.shape, -32768.0, dtype=np.float64)
-    valid = ~nodata_mask
-    if np.any(valid):
-        rounded[valid] = np.round(data[valid] / factor) * factor
+    # Terrarium tiles expect missing data to sit at sea level (0 m).
+    # Replace NaNs before rounding so downstream viewers do not interpret
+    # nodata as extremely low elevations (e.g. -32768 m).
+    filled = np.where(nodata_mask, 0.0, data)
 
-    # Offset for terrarium encoding (Terrarium nodata defaults to -32768m → RGB 0/0/0)
+    # Apply zoom-level specific vertical resolution rounding
+    factor = get_vertical_resolution(z)
+    rounded = np.round(filled / factor) * factor
+
+    # Offset for terrarium encoding (0 m → RGB 128/0/0)
     data_offset = rounded + 32768.0
 
     # Encode to RGB
     rgb = np.zeros((512, 512, 3), dtype=np.uint8)
-    if np.any(valid):
-        rgb_valid = rgb[valid]
-        offset_valid = data_offset[valid]
-        rgb_valid[..., 0] = np.clip(offset_valid // 256, 0, 255).astype(np.uint8)
-        rgb_valid[..., 1] = np.clip(offset_valid % 256, 0, 255).astype(np.uint8)
-        fractional = (offset_valid - np.floor(offset_valid)) * 256
-        rgb_valid[..., 2] = np.clip(fractional, 0, 255).astype(np.uint8)
-        rgb[valid] = rgb_valid
+    rgb[..., 0] = np.clip(data_offset // 256, 0, 255).astype(np.uint8)
+    rgb[..., 1] = np.clip(data_offset % 256, 0, 255).astype(np.uint8)
+    fractional = (data_offset - np.floor(data_offset)) * 256
+    rgb[..., 2] = np.clip(fractional, 0, 255).astype(np.uint8)
 
-    # Nodata remains RGB(0,0,0) by construction
     return rgb
 
 
