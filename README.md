@@ -6,7 +6,7 @@
 
 - `bounds.csv` による GeoTIFF メタデータ管理と空間インデックス
 - 512px タイルを前提にした自動ズーム推定（GSD から max zoom を決定）
-- Terrarium エンコード（mapterhorn 互換）と nodata=`-32768m` の適切な取り扱い
+- Terrarium エンコード（mapterhorn 互換）と nodata を 0 m に正規化する安全策
 - Lossless WebP タイルを PMTiles にストリーミング書き込み
 - 集約パイプライン：複数 GeoTIFF をオンザフライでモザイクし 1 本の PMTiles に統合
 - 進捗表示：候補タイル数・書き出しタイル数・割合を標準出力に逐次表示
@@ -98,9 +98,17 @@ just inspect output/bulk_all.pmtiles
 
 ヘッダ情報・ズームレンジ・バウンディングボックスなどが確認できます。
 
+### 5. 配布先へのアップロード（任意）
+
+```bash
+just upload
+```
+
+`output/fusi.pmtiles` を想定したアップロードタスクです。宛先やファイル名を変える場合は `justfile` の `upload` レシピを調整してください。
+
 ## 実務で得た Tips
 
-- **テストから本番へ**: 小さなサブセットで `just aggregate` を試し、ズーム自動推定や nodata 振る舞いを確認してから全量処理すると安全です。
+- **テストから本番へ**: 小さなサブセットで `just aggregate` を試し、ズーム自動推定や nodata=0 m の挙動を確認してから全量処理すると安全です。
 - **進捗ログ**: 大量データのときは出力が数時間続くことがあります。進捗ログには「書き出し済みタイル数」「チェック済み候補数」「全候補に対する割合」が表示されるため、残り時間の目安になります。
 - **Mapzen (Mapterhorn) との比較**: Mapzen の Mapterhorn タイルはズーム 0–15 が公式レンジ（[ドキュメント](https://raw.githubusercontent.com/tilezen/joerd/master/docs/index.md)）です。本ツールはズーム 16 まで自動出力できるので、地形の細部を 1 段深く表現できます。
 - **データサイズ**: Lossless WebP により圧縮しますが、ズーム範囲によっては数十 GB になる場合があります。十分なディスク容量を確保してください。
@@ -116,6 +124,7 @@ just test-sample <source>         # 代表ファイルでの動作確認
 just batch-convert <source>       # GNU Parallel を使った一括変換
 just aggregate <source> <output> [options]
 just inspect <pmtiles>            # PMTiles メタデータ閲覧
+just upload                       # output/fusi.pmtiles をリモートへ rsync
 just clean / clean-all            # 出力や bounds.csv を削除
 ```
 
@@ -124,9 +133,9 @@ just clean / clean-all            # 出力や bounds.csv を削除
 - **タイルサイズ**: 512 × 512 px
 - **ズーム範囲**: 既定値は 0–15。ソースの GSD ≈ 1.4 m の場合は自動で 16 が選択されます。
 - **Terrarium エンコード**
-	- デコード式: `elevation = (R × 256 + G + B / 256) - 32768`
-	- nodata は RGB = (0,0,0) → `-32768 m`
-	- ズーム別垂直解像度は mapterhorn と同じフォーミュラで 2 のべき乗に丸め
+  - デコード式: `elevation = (R × 256 + G + B / 256) - 32768`
+  - nodata は 0 m として出力（RGB ≈ 128/0/0）
+  - ズーム別垂直解像度は mapterhorn と同じフォーミュラで 2 のべき乗に丸め
 - **メタデータ**: attribution に `国土地理院 (GSI Japan)`、ライセンスとして `R 6JHs 133` を埋め込み
 - **PMTiles メタデータ**: `encoding=terrarium`, `tile_type=webp`, attribution は `国土地理院 (GSI Japan)`
 
@@ -136,7 +145,7 @@ just clean / clean-all            # 出力や bounds.csv を削除
 |------|------------------|--------------------|
 | オフセット | +32768 | +10000 |
 | 解像度 | 1/256 m (ズーム 19 換算) | 0.1 m |
-| nodata | -32768 m | -10000 m |
+| nodata | 0 m | -10000 m |
 | 用途 | mapterhorn 互換ビジュアライズ | Mapbox/MapLibre 公式タイルセット |
 
 ## プロジェクト構成
@@ -163,7 +172,7 @@ fusi/
 
 - [x] GeoTIFF → Terrarium PMTiles 単体変換
 - [x] bounds.csv 生成とメタデータ管理
-- [x] nodata=`-32768` の Terrarium 互換処理
+- [x] nodata を 0 m に正規化する Terrarium 互換処理
 - [x] ズーム自動推定 & 512px タイル対応
 - [x] 集約パイプラインと進捗表示
 - [ ] Downsampling / オーバービュー生成
