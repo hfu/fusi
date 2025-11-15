@@ -17,7 +17,6 @@
 - Python 3.12 以上
 - pipenv
 - just（Homebrew: `brew install just`）
-- （任意）GNU Parallel ― `just batch-convert` 実行時に使用
 
 ### 参考: ツールの導入例
 
@@ -67,7 +66,40 @@ just bounds bulk_all
 
 標準出力に処理件数が表示され、`source-store/bulk_all/bounds.csv` が生成されます。
 
-### 2. 単一 GeoTIFF の変換
+### 2. PMTiles を生成
+
+```bash
+just aggregate bulk_all
+```
+
+- `output/fusi.pmtiles` が生成されます。別名で出力したい場合は `just aggregate bulk_all output/bulk_all.pmtiles` のように第 2 引数を指定します。
+- `bounds.csv` から対象ファイルを抽出し、各タイルごとに再投影・モザイク・Terrarium エンコードを行います。
+- 標準出力にはズーム別の候補タイル数と進捗率が表示されます。
+  - 例: フルデータセット（4,694 枚）では 1,996,833 候補をスキャンし、24,540 枚のタイルを書き出しました。
+- オプション
+  - `--bbox <west> <south> <east> <north>`: WGS84 度で出力範囲を限定
+  - `--min-zoom`, `--max-zoom`: 出力ズームレンジを明示指定
+  - `--progress-interval 1000`: 進捗ログの間隔を調整
+
+### 3. 出力の確認
+
+```bash
+just inspect output/fusi.pmtiles
+```
+
+ヘッダ情報・ズームレンジ・バウンディングボックスなどが確認できます。
+
+### 4. 配布先へのアップロード（任意）
+
+```bash
+just upload
+```
+
+`output/fusi.pmtiles` を想定したアップロードタスクです。宛先やファイル名を変える場合は `justfile` の `upload` レシピを調整してください。
+
+## オプション: 単一 GeoTIFF の変換
+
+一枚の GeoTIFF を手早く確認したいときは `just convert` を使えます。
 
 ```bash
 just convert source-store/bulk_all/sample.tif output/sample.pmtiles
@@ -75,36 +107,6 @@ just convert source-store/bulk_all/sample.tif output/sample.pmtiles
 
 - `--max-zoom` を省略すると、ソースの Ground Sample Distance (GSD) からズームを自動推定します。
 - 実行ログに「Auto-selected max zoom …」が表示されます。
-
-### 3. 複数 GeoTIFF の集約
-
-```bash
-just aggregate bulk_all output/bulk_all.pmtiles
-```
-
-- `bounds.csv` から対象ファイルを抽出し、各タイルごとに再投影・モザイク・Terrarium エンコードを行います。
-- 標準出力にはズーム別の候補タイル数と進捗率が表示されます。
-	- 例: フルデータセット（4,694 枚）では 1,996,833 候補をスキャンし、24,540 枚のタイルを書き出しました。
-- オプション
-	- `--bbox <west> <south> <east> <north>`: WGS84 度で出力範囲を限定
-	- `--min-zoom`, `--max-zoom`: 出力ズームレンジを明示指定
-	- `--progress-interval 1000`: 進捗ログの間隔を調整
-
-### 4. 出力の確認
-
-```bash
-just inspect output/bulk_all.pmtiles
-```
-
-ヘッダ情報・ズームレンジ・バウンディングボックスなどが確認できます。
-
-### 5. 配布先へのアップロード（任意）
-
-```bash
-just upload
-```
-
-`output/fusi.pmtiles` を想定したアップロードタスクです。宛先やファイル名を変える場合は `justfile` の `upload` レシピを調整してください。
 
 ## 実務で得た Tips
 
@@ -121,8 +123,7 @@ just check                        # 依存関係チェック
 just bounds <source>              # bounds.csv 生成
 just convert <input> <output> [--min-zoom Z] [--max-zoom Z]
 just test-sample <source>         # 代表ファイルでの動作確認
-just batch-convert <source>       # GNU Parallel を使った一括変換
-just aggregate <source> <output> [options]
+just aggregate <source> [<output>] [options]
 just inspect <pmtiles>            # PMTiles メタデータ閲覧
 just upload                       # output/fusi.pmtiles をリモートへ rsync
 just clean / clean-all            # 出力や bounds.csv を削除

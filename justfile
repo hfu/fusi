@@ -1,10 +1,9 @@
 # Justfile for fusi - Japanese elevation data to PMTiles converter
 # Following mapterhorn methodology with Terrarium encoding
 #
-# Pipeline: GeoTIFF → bounds.csv → Terrarium-encoded WebP tiles → PMTiles
-# Two-stage approach:
-#   1. Generate bounds.csv metadata for all GeoTIFFs
-#   2. Convert to Terrarium-encoded PMTiles with zoom-dependent vertical resolution
+# Current pipeline:
+#   1. `just bounds <source>` to record GeoTIFF metadata
+#   2. `just aggregate <source>` to build Terrarium PMTiles (defaults to output/fusi.pmtiles)
 
 source_dir := "source-store"
 output_dir := "output"
@@ -51,57 +50,34 @@ test-sample source_name:
     fi
     just convert "$first_file" "{{output_dir}}/sample.pmtiles"
 
-# 5. Batch: Convert all files from a source (parallel processing)
-batch-convert source_name:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{output_dir}}
-    if ! command -v parallel &> /dev/null; then
-        echo "Error: GNU Parallel not installed. Install with: brew install parallel (macOS) or sudo apt install parallel (Ubuntu)"
-        exit 1
-    fi
-    find -L "{{source_dir}}/{{source_name}}" -name "*.tif" | \
-        parallel just convert {} {{output_dir}}/{/.}.pmtiles
-
-# 6. Aggregate: Merge multiple GeoTIFFs into one PMTiles
-aggregate source_name output_file *extra_args:
+# 5. Aggregate: Merge multiple GeoTIFFs into one PMTiles (defaults to output/fusi.pmtiles)
+aggregate source_name output_file="output/fusi.pmtiles" *extra_args:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "$(dirname "{{output_file}}")"
     pipenv run python pipelines/aggregate_pmtiles.py "{{source_name}}" "{{output_file}}" {{extra_args}}
 
-# 7. Clean: Remove output directory
+# 6. Clean: Remove output directory
 clean:
     rm -rf {{output_dir}}
 
-# 8. Clean all: Remove output and generated bounds
+# 7. Clean all: Remove output and generated bounds
 clean-all:
     rm -rf {{output_dir}}
     find {{source_dir}} -name "bounds.csv" -delete
 
-# 9. Check: Verify system dependencies
+# 8. Check: Verify system dependencies
 check:
     @echo "Checking dependencies..."
     @which python3 || echo "❌ Python 3 not found"
     @pipenv --version || echo "❌ pipenv not found"
-    @which parallel || echo "⚠️  GNU Parallel not found (optional, for batch processing)"
     @echo "✓ Dependency check complete"
 
-# 10. Config: Show current configuration
-config:
-    @echo "=== Fusi Configuration ==="
-    @echo "Source directory: {{source_dir}}"
-    @echo "Output directory: {{output_dir}}"
-    @echo "Default zoom: 0-15"
-    @echo "Encoding: Terrarium (mapterhorn compatible)"
-    @echo "Tile format: Lossless WebP"
-    @echo "Tile size: 512×512 pixels"
-
-# 11. Inspect: Show PMTiles metadata
+# 9. Inspect: Show PMTiles metadata
 inspect pmtiles_file:
     pipenv run python pipelines/inspect_pmtiles.py "{{pmtiles_file}}"
 
-# 12. Upload: Sync PMTiles to remote host
+# 10. Upload: Sync PMTiles to remote host
 upload:
     #!/usr/bin/env bash
     set -euo pipefail
