@@ -200,7 +200,12 @@ def generate_tiles(src_path, min_zoom, max_zoom):
                     continue
 
 
-def create_pmtiles(tiles_generator, output_path):
+def create_pmtiles(
+    tiles_generator,
+    output_path,
+    spool_dir: str | None = None,
+    fsync_interval_tiles: int = 0,
+):
     """
     Create PMTiles archive from generated tiles.
     
@@ -208,6 +213,12 @@ def create_pmtiles(tiles_generator, output_path):
         tiles_generator: Generator yielding (z, x, y, webp_data) tuples
         output_path: Path to output PMTiles file
     """
+    # Prefer spooling temporary data alongside the output to avoid filling the
+    # system volume (e.g., macOS /var). If not provided, default to the output
+    # directory so external disks are used when applicable.
+    if spool_dir is None:
+        spool_dir = str(Path(output_path).parent)
+
     with open(output_path, 'wb') as f:
         writer = Writer(f)
         
@@ -222,12 +233,22 @@ def create_pmtiles(tiles_generator, output_path):
         
         # Stream tiles to a temporary file to avoid loading all into memory
         import pickle
-        with tempfile.NamedTemporaryFile(delete=False) as tmpfile:
+        with tempfile.NamedTemporaryFile(delete=False, dir=spool_dir, suffix=".spool") as tmpfile:
             tmpfile_path = tmpfile.name
+            since_fsync = 0
             for z, x, y, webp_data in tiles_generator:
                 tile_id = zxy_to_tileid(z=z, x=x, y=y)
                 # Write a tuple (tile_id, webp_data) to the temp file
                 pickle.dump((tile_id, webp_data), tmpfile)
+                since_fsync += 1
+                if fsync_interval_tiles and since_fsync >= fsync_interval_tiles:
+                    tmpfile.flush()
+                    try:
+                        import os
+                        os.fsync(tmpfile.fileno())
+                    except Exception:
+                        pass
+                    since_fsync = 0
 
                 # Update bounds
                 max_z = max(max_z, z)

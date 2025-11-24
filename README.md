@@ -1,6 +1,6 @@
 # fusi
 
-`fusi` は国土地理院の約 4,700 枚の標高 GeoTIFF を Terrarium 形式の PMTiles に変換するツールチェーンです。mapterhorn が示した手法をベースに、Web Mercator（EPSG:3857）への自動再投影やズーム別の垂直解像度管理を備えています。2025 年現在、フルデータセット（4,694 ファイル）をズーム 0–16 で 1 本の PMTiles にまとめることを確認済みです。
+`fusi` は国土地理院の標高 GeoTIFF を Terrarium 形式の PMTiles に変換するツールチェーンです。mapterhorn が示した手法をベースに、Web Mercator（EPSG:3857）への自動再投影やズーム別の垂直解像度管理を備えています。
 
 ## 主な特徴
 
@@ -66,7 +66,7 @@ just bounds bulk_all
 
 標準出力に処理件数が表示され、`source-store/bulk_all/bounds.csv` が生成されます。
 
-### 2. PMTiles を生成
+### 2. PMTiles を生成（安全デフォルトでI/O安定化）
 
 ```bash
 just aggregate bulk_all
@@ -74,12 +74,21 @@ just aggregate bulk_all
 
 - `output/fusi.pmtiles` が生成されます。別名で出力したい場合は `just aggregate bulk_all output/bulk_all.pmtiles` のように第 2 引数を指定します。
 - `bounds.csv` から対象ファイルを抽出し、各タイルごとに再投影・モザイク・Terrarium エンコードを行います。
-- 標準出力にはズーム別の候補タイル数と進捗率が表示されます。
-  - 例: フルデータセット（4,694 枚）では 1,996,833 候補をスキャンし、24,540 枚のタイルを書き出しました。
-- オプション
-  - `--bbox <west> <south> <east> <north>`: WGS84 度で出力範囲を限定
-  - `--min-zoom`, `--max-zoom`: 出力ズームレンジを明示指定
-  - `--progress-interval 1000`: 進捗ログの間隔を調整
+- 標準出力にはズーム別の候補タイル数と進捗率に加え、フェーズログ（union bounds / coarse bucket 構築 / 候補数計測）が表示され、停滞の切り分けが容易です。
+- I/O 安定化のため、以下を既定で有効化しています（必要に応じて上書き可能です）。
+  - `TMPDIR` を出力ディレクトリに設定（スプールを外付け側へ誘導）
+  - `GDAL_CACHEMAX=512`（環境変数で変更可）
+  - `--warp-threads 1`（再投影スレッドを1に抑制）
+  - `--io-sleep-ms 1`（タイルごとに1msスリープでI/Oに負圧）
+  - `--fsync-interval-tiles 10000`（スプールファイルを定期的にflush+fsync）
+  - `--progress-interval 200`（進捗ログの既定間隔）
+  - `--verbose`（詳細ログを既定有効）
+
+オプション
+
+- `--bbox <west> <south> <east> <north>`: WGS84 度で出力範囲を限定
+- `--min-zoom`, `--max-zoom`: 出力ズームレンジを明示指定
+- `--progress-interval N`: 進捗ログの間隔を調整
 
 ### 3. 出力の確認
 
@@ -111,7 +120,9 @@ just convert source-store/bulk_all/sample.tif output/sample.pmtiles
 ## 実務で得た Tips
 
 - **テストから本番へ**: 小さなサブセットで `just aggregate` を試し、ズーム自動推定や nodata=0 m の挙動を確認してから全量処理すると安全です。
-- **進捗ログ**: 大量データのときは出力が数時間続くことがあります。進捗ログには「書き出し済みタイル数」「チェック済み候補数」「全候補に対する割合」が表示されるため、残り時間の目安になります。
+- **進捗ログ**: 大量データのときは出力が数時間続くことがあります。進捗ログには「書き出し済みタイル数」「チェック済み候補数」「全候補に対する割合」が表示されるため、残り時間の目安になります。フェーズログ（union/bucket/count）で停滞箇所を切り分けできます。
+- **一時ファイルの置き場**: 既定で出力ディレクトリ配下にスプールするため、macOS のシステムボリューム容量逼迫を避けられます。独自ディレクトリへ変更する場合は `TMPDIR` を上書きしてください。
+- **GDAL キャッシュ**: 既定 `GDAL_CACHEMAX=512`。マシンに余裕があれば上げられますが、I/O 飽和時は増やし過ぎないでください。
 - **Mapzen (Mapterhorn) との比較**: Mapzen の Mapterhorn タイルはズーム 0–15 が公式レンジ（[ドキュメント](https://raw.githubusercontent.com/tilezen/joerd/master/docs/index.md)）です。本ツールはズーム 16 まで自動出力できるので、地形の細部を 1 段深く表現できます。
 - **データサイズ**: Lossless WebP により圧縮しますが、ズーム範囲によっては数十 GB になる場合があります。十分なディスク容量を確保してください。
 
@@ -124,6 +135,7 @@ just bounds <source>              # bounds.csv 生成
 just convert <input> <output> [--min-zoom Z] [--max-zoom Z]
 just test-sample <source>         # 代表ファイルでの動作確認
 just aggregate <source> [<output>] [options]
+  # 既定で --verbose を有効化し、TMPDIR=output/ と GDAL_CACHEMAX=512 を設定
 just inspect <pmtiles>            # PMTiles メタデータ閲覧
 just upload                       # output/fusi.pmtiles をリモートへ rsync
 just clean / clean-all            # 出力や bounds.csv を削除

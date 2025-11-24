@@ -55,7 +55,14 @@ aggregate source_name output_file="output/fusi.pmtiles" *extra_args:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "$(dirname "{{output_file}}")"
-    pipenv run python pipelines/aggregate_pmtiles.py "{{source_name}}" "{{output_file}}" {{extra_args}}
+    # Default to spooling temp data on the output disk to avoid system volume pressure
+    export TMPDIR="$(cd "$(dirname "{{output_file}}")" && pwd)"
+    # Keep GDAL cache modest unless overridden by user
+    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+    # Turn on verbose by default; users can add --quiet via extra_args if needed
+    pipenv run python pipelines/aggregate_pmtiles.py \
+        "{{source_name}}" "{{output_file}}" \
+        --verbose {{extra_args}}
 
 # 6. Clean: Remove output directory
 clean:

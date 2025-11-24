@@ -28,6 +28,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Generator, Iterable, List, Optional, Sequence, Tuple
+import time
 
 import imagecodecs
 import mercantile
@@ -93,8 +94,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--progress-interval",
         type=int,
-        default=500,
+        default=200,
         help="Tile interval for printing progress updates",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Increase logging verbosity during aggregation",
+    )
+    parser.add_argument(
+        "--io-sleep-ms",
+        type=int,
+        default=1,
+        help="Sleep for the given milliseconds per emitted tile to ease I/O pressure",
+    )
+    parser.add_argument(
+        "--fsync-interval-tiles",
+        type=int,
+        default=10000,
+        help="Flush+fsync spool file every N tiles (0 disables)",
+    )
+    parser.add_argument(
+        "--warp-threads",
+        type=int,
+        default=1,
+        help="Number of threads for raster warping (reproject). Use 1 to reduce I/O pressure",
     )
     args = parser.parse_args()
 
@@ -189,6 +213,7 @@ def read_tile_from_source(
     record: SourceRecord,
     tile_bounds_mercator: mercantile.TileBoundingBox,
     out_shape: Tuple[int, int],
+    warp_threads: int,
 ) -> Optional[np.ndarray]:
     """Reproject the raster onto the requested tile grid and return float32 elevations."""
 
@@ -218,6 +243,7 @@ def read_tile_from_source(
             resampling=Resampling.bilinear,
             src_nodata=src.nodata,
             dst_nodata=np.nan,
+            num_threads=max(1, int(warp_threads)),
         )
 
         if np.isnan(destination).all():
@@ -250,7 +276,11 @@ def generate_aggregated_tiles(
     max_zoom: int,
     bbox_wgs84: Optional[Tuple[float, float, float, float]] = None,
     progress_interval: int = 500,
+    verbose: bool = False,
+    io_sleep_ms: int = 0,
+    warp_threads: int = 1,
 ) -> Generator[Tuple[int, int, int, bytes], None, None]:
+    print("[phase] Computing union bounds...")
     union_left, union_bottom, union_right, union_top = union_bounds(records)
     union_west, union_south, union_east, union_north = transform_bounds(
         EPSG_3857,
@@ -274,6 +304,7 @@ def generate_aggregated_tiles(
         west, south, east, north = union_west, union_south, union_east, union_north
 
     # Build spatial index keyed by zoom level 5 tiles for efficient candidate filtering
+    print("[phase] Building coarse buckets (z5) for source records...")
     buckets: Dict[Tuple[int, int, int], List[SourceRecord]] = defaultdict(list)
     coarse_zoom = 5
     for record in records:
@@ -289,8 +320,11 @@ def generate_aggregated_tiles(
         for tile in mercantile.tiles(west_r, south_r, east_r, north_r, coarse_zoom):
             buckets[(coarse_zoom, tile.x, tile.y)].append(record)
 
+    print(f"[phase] Coarse buckets ready: {len(buckets)} tiles with candidates")
+
     per_zoom_candidate_counts: Dict[int, int] = {}
     total_candidates = 0
+    print("[phase] Scanning candidate tile counts per zoom...")
     for z in range(min_zoom, max_zoom + 1):
         count = sum(1 for _ in mercantile.tiles(west, south, east, north, z))
         per_zoom_candidate_counts[z] = count
@@ -309,6 +343,8 @@ def generate_aggregated_tiles(
     emitted_tiles = 0
 
     for z in range(min_zoom, max_zoom + 1):
+        if verbose:
+            print(f"[z{z}] Starting tile scan...")
         for tile in mercantile.tiles(west, south, east, north, z):
             checked_tiles += 1
             xy_bounds = mercantile.xy_bounds(tile)
@@ -330,7 +366,7 @@ def generate_aggregated_tiles(
             tile_arrays: List[np.ndarray] = []
             for rec in overlapping:
                 try:
-                    data = read_tile_from_source(rec, xy_bounds, out_shape=(512, 512))
+                    data = read_tile_from_source(rec, xy_bounds, out_shape=(512, 512), warp_threads=warp_threads)
                 except Exception as exc:  # pragma: no cover - defensive logging
                     print(f"Warning: {exc}")
                     continue
@@ -359,6 +395,9 @@ def generate_aggregated_tiles(
                 )
 
             yield z, tile.x, tile.y, webp
+
+            if io_sleep_ms > 0:
+                time.sleep(io_sleep_ms / 1000.0)
 
     print(
         f"Finished tile generation: {emitted_tiles} tiles produced from {checked_tiles} candidates"
@@ -397,9 +436,16 @@ def main() -> None:
         max_zoom=max_zoom,
         bbox_wgs84=bbox,
         progress_interval=args.progress_interval,
+        verbose=args.verbose,
+        io_sleep_ms=args.io_sleep_ms,
+        warp_threads=args.warp_threads,
     )
 
-    create_pmtiles(tiles, output_path)
+    create_pmtiles(
+        tiles,
+        output_path,
+        fsync_interval_tiles=args.fsync_interval_tiles,
+    )
 
 
 if __name__ == "__main__":
