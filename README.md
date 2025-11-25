@@ -1,14 +1,14 @@
 # fusi
 
-`fusi` は国土地理院の標高 GeoTIFF を Terrarium 形式の PMTiles に変換するツールチェーンです。mapterhorn が示した手法をベースに、Web Mercator（EPSG:3857）への自動再投影やズーム別の垂直解像度管理を備えています。
+`fusi` は国土地理院の標高 GeoTIFF を Terrarium 形式のタイルに変換するツールチェーンです。mapterhorn が示した手法をベースに、Web Mercator（EPSG:3857）への自動再投影やズーム別の垂直解像度管理を備えています。内部的には Lossless WebP のタイルを MBTiles に書き出し、`go-pmtiles` の `pmtiles convert` コマンドで PMTiles に変換します。
 
 ## 主な特徴
 
 - `bounds.csv` による GeoTIFF メタデータ管理と空間インデックス
 - 512px タイルを前提にした自動ズーム推定（GSD から max zoom を決定）
 - Terrarium エンコード（mapterhorn 互換）と nodata を 0 m に正規化する安全策
-- Lossless WebP タイルを PMTiles にストリーミング書き込み
-- 集約パイプライン：複数 GeoTIFF をオンザフライでモザイクし 1 本の PMTiles に統合
+- Lossless WebP タイルを MBTiles にストリーミング書き込みし、その後 PMTiles に変換
+- 集約パイプライン：複数 GeoTIFF をオンザフライでモザイクし 1 本の MBTiles/PMTiles に統合
 - 進捗表示：候補タイル数・書き出しタイル数・割合を標準出力に逐次表示
 - `just` コマンドで一連のタスクを自動化
 
@@ -17,12 +17,14 @@
 - Python 3.12 以上
 - pipenv
 - just（Homebrew: `brew install just`）
+- go-pmtiles （`pmtiles` CLI、例: `brew install golang && go install github.com/protomaps/go-pmtiles/cmd/pmtiles@latest`）
 
 ### 参考: ツールの導入例
 
 ```bash
 brew install just parallel   # macOS
 pip3 install --user pipenv
+go install github.com/protomaps/go-pmtiles/cmd/pmtiles@latest
 ```
 
 ## セットアップ
@@ -66,26 +68,29 @@ just bounds bulk_all
 
 標準出力に処理件数が表示され、`source-store/bulk_all/bounds.csv` が生成されます。
 
-### 2. PMTiles を生成（安全デフォルトでI/O安定化）
+### 2. MBTiles/PMTiles を生成（安全デフォルトでI/O安定化）
 
 ```bash
 just aggregate bulk_all
 ```
 
-- `output/fusi.pmtiles` が生成されます。別名で出力したい場合は `just aggregate bulk_all output/bulk_all.pmtiles` のように第 2 引数を指定します。
+- `output/fusi.pmtiles` が生成されます（内部的に `output/fusi.mbtiles` → `pmtiles convert`）。
+  
+  補足: MBTiles の書き込みでは SQLite の WAL モードを使用します。長時間・大規模書き込み時に WAL ファイルが肥大化しないよう、内部で定期的に `PRAGMA wal_checkpoint(TRUNCATE)` を実行して `.wal` を短く保ち、処理完了時に `PRAGMA journal_mode=DELETE` に戻して `.wal/.shm` を削除する設計になっています。
+- 別名で出力したい場合は `just aggregate -o output/bulk_all.pmtiles bulk_all` のように `-o/--output` で PMTiles パスを指定します。
 - `bounds.csv` から対象ファイルを抽出し、各タイルごとに再投影・モザイク・Terrarium エンコードを行います。
 - 標準出力にはズーム別の候補タイル数と進捗率に加え、フェーズログ（union bounds / coarse bucket 構築 / 候補数計測）が表示され、停滞の切り分けが容易です。
 - I/O 安定化のため、以下を既定で有効化しています（必要に応じて上書き可能です）。
-  - `TMPDIR` を出力ディレクトリに設定（スプールを外付け側へ誘導）
+  - `TMPDIR` を出力ディレクトリに設定（Python の一時ファイルを外付け側へ誘導）
   - `GDAL_CACHEMAX=512`（環境変数で変更可）
   - `--warp-threads 1`（再投影スレッドを1に抑制）
   - `--io-sleep-ms 1`（タイルごとに1msスリープでI/Oに負圧）
-  - `--fsync-interval-tiles 10000`（スプールファイルを定期的にflush+fsync）
   - `--progress-interval 200`（進捗ログの既定間隔）
   - `--verbose`（詳細ログを既定有効）
 
-オプション
+オプション（`just aggregate` 経由で `pipelines/aggregate_pmtiles.py` に渡ります）
 
+- `-o/--output <pmtiles>`: 最終的な PMTiles パスを指定（内部的に同名の `.mbtiles` が生成されます）
 - `--bbox <west> <south> <east> <north>`: WGS84 度で出力範囲を限定
 - `--min-zoom`, `--max-zoom`: 出力ズームレンジを明示指定
 - `--progress-interval N`: 進捗ログの間隔を調整
@@ -134,7 +139,8 @@ just check                        # 依存関係チェック
 just bounds <source>              # bounds.csv 生成
 just convert <input> <output> [--min-zoom Z] [--max-zoom Z]
 just test-sample <source>         # 代表ファイルでの動作確認
-just aggregate <source> [<output>] [options]
+just aggregate <source...> [options]
+  # -o/--output で PMTiles パスを指定（省略時は output/fusi.pmtiles）
   # 既定で --verbose を有効化し、TMPDIR=output/ と GDAL_CACHEMAX=512 を設定
 just inspect <pmtiles>            # PMTiles メタデータ閲覧
 just upload                       # output/fusi.pmtiles をリモートへ rsync
@@ -169,11 +175,12 @@ fusi/
 │   └── <source>/
 │       ├── *.tif
 │       └── bounds.csv        # just bounds で生成
-├── output/                   # 変換結果 PMTiles
+├── output/                   # 変換結果 MBTiles / PMTiles
 ├── pipelines/
 │   ├── source_bounds.py      # bounds.csv 作成
 │   ├── convert_terrarium.py  # 単一 GeoTIFF → PMTiles
-│   ├── aggregate_pmtiles.py  # 複数 GeoTIFF → PMTiles 集約
+│   ├── aggregate_pmtiles.py  # 複数 GeoTIFF → MBTiles 集約（+ pmtiles convert）
+│   ├── mbtiles_writer.py     # Terrarium WebP タイルを MBTiles に書き出すヘルパ
 │   └── inspect_pmtiles.py    # PMTiles のヘッダ確認
 ├── justfile                  # タスクランナー定義
 ├── Pipfile / Pipfile.lock    # Python 依存関係
