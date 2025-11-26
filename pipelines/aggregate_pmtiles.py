@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Dict, Generator, Iterable, List, Optional, Sequence, Tuple
 import time
 
-import imagecodecs
 import mercantile
 import numpy as np
 import rasterio
@@ -38,10 +37,14 @@ from rasterio.enums import Resampling
 from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.warp import transform_bounds, reproject
 
+import imagecodecs
+
 try:  # Allow running as a module or script
-    from .convert_terrarium import create_pmtiles, encode_terrarium
+    from .convert_terrarium import encode_terrarium
+    from .mbtiles_writer import create_mbtiles_from_tiles
 except ImportError:  # pragma: no cover - fallback for direct execution
-    from convert_terrarium import create_pmtiles, encode_terrarium
+    from convert_terrarium import encode_terrarium
+    from mbtiles_writer import create_mbtiles_from_tiles
 
 EPSG_4326 = "EPSG:4326"
 EPSG_3857 = "EPSG:3857"
@@ -72,11 +75,15 @@ class SourceRecord:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Aggregate GeoTIFFs into a Terrarium PMTiles archive",
+        description="Aggregate GeoTIFFs into a Terrarium tiles archive (MBTiles + PMTiles)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("source_name", help="Name of the source directory under source-store/")
-    parser.add_argument("output", help="Output PMTiles path")
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="output/fusi.pmtiles",
+        help="Output PMTiles path (MBTilesは同名で拡張子だけ .mbtiles に変更)",
+    )
     parser.add_argument("--min-zoom", type=int, default=0, help="Minimum zoom level")
     parser.add_argument(
         "--max-zoom",
@@ -119,6 +126,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Number of threads for raster warping (reproject). Use 1 to reduce I/O pressure",
+    )
+    parser.add_argument(
+        "sources",
+        nargs="+",
+        help="One or more source names under source-store/ (priority order)",
     )
     args = parser.parse_args()
 
@@ -280,6 +292,9 @@ def generate_aggregated_tiles(
     io_sleep_ms: int = 0,
     warp_threads: int = 1,
 ) -> Generator[Tuple[int, int, int, bytes], None, None]:
+    # Track start time for ETA calculations and timestamped verbose logs
+    start_time = time.time()
+
     print("[phase] Computing union bounds...")
     union_left, union_bottom, union_right, union_top = union_bounds(records)
     union_west, union_south, union_east, union_north = transform_bounds(
@@ -304,7 +319,10 @@ def generate_aggregated_tiles(
         west, south, east, north = union_west, union_south, union_east, union_north
 
     # Build spatial index keyed by zoom level 5 tiles for efficient candidate filtering
-    print("[phase] Building coarse buckets (z5) for source records...")
+    if verbose:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [phase] Building coarse buckets (z5) for source records...")
+    else:
+        print("[phase] Building coarse buckets (z5) for source records...")
     buckets: Dict[Tuple[int, int, int], List[SourceRecord]] = defaultdict(list)
     coarse_zoom = 5
     for record in records:
@@ -320,30 +338,44 @@ def generate_aggregated_tiles(
         for tile in mercantile.tiles(west_r, south_r, east_r, north_r, coarse_zoom):
             buckets[(coarse_zoom, tile.x, tile.y)].append(record)
 
-    print(f"[phase] Coarse buckets ready: {len(buckets)} tiles with candidates")
+    if verbose:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [phase] Coarse buckets ready: {len(buckets)} tiles with candidates")
+    else:
+        print(f"[phase] Coarse buckets ready: {len(buckets)} tiles with candidates")
 
     per_zoom_candidate_counts: Dict[int, int] = {}
     total_candidates = 0
-    print("[phase] Scanning candidate tile counts per zoom...")
+    if verbose:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [phase] Scanning candidate tile counts per zoom...")
+    else:
+        print("[phase] Scanning candidate tile counts per zoom...")
     for z in range(min_zoom, max_zoom + 1):
         count = sum(1 for _ in mercantile.tiles(west, south, east, north, z))
         per_zoom_candidate_counts[z] = count
         total_candidates += count
 
-    print(
-        f"Planned tile scan: {total_candidates} candidates across zooms {min_zoom}-{max_zoom}"
-    )
+    if verbose:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Planned tile scan: {total_candidates} candidates across zooms {min_zoom}-{max_zoom}")
+    else:
+        print(
+            f"Planned tile scan: {total_candidates} candidates across zooms {min_zoom}-{max_zoom}"
+        )
     if total_candidates:
         detail = ", ".join(
             f"z{z}:{per_zoom_candidate_counts[z]}" for z in range(min_zoom, max_zoom + 1)
         )
-        print(f"  Per-zoom candidate counts: {detail}")
+        if verbose:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}]   Per-zoom candidate counts: {detail}")
+        else:
+            print(f"  Per-zoom candidate counts: {detail}")
 
     checked_tiles = 0
     emitted_tiles = 0
 
     for z in range(min_zoom, max_zoom + 1):
         if verbose:
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [z{z}] Starting tile scan...")
+        else:
             print(f"[z{z}] Starting tile scan...")
         for tile in mercantile.tiles(west, south, east, north, z):
             checked_tiles += 1
@@ -389,9 +421,20 @@ def generate_aggregated_tiles(
                 emitted_tiles % progress_interval == 0 or checked_tiles == total_candidates
             ):
                 percent = (checked_tiles / total_candidates * 100.0) if total_candidates else 0.0
+                # ETA based on checked_tiles processing rate
+                now = time.time()
+                elapsed = max(1e-6, now - start_time)
+                rate = checked_tiles / elapsed if elapsed > 0 else 0
+                eta_str = "?"
+                if rate > 0 and total_candidates and checked_tiles < total_candidates:
+                    remaining = total_candidates - checked_tiles
+                    eta_seconds = int(remaining / rate)
+                    eta_time = time.localtime(now + eta_seconds)
+                    eta_str = time.strftime('%Y-%m-%d %H:%M:%S', eta_time) + f" (in {eta_seconds}s)"
+
                 print(
                     f"Progress: {emitted_tiles} tiles written; processed {checked_tiles}/"
-                    f"{total_candidates} candidates ({percent:.1f}%)"
+                    f"{total_candidates} candidates ({percent:.1f}%) ETA: {eta_str}"
                 )
 
             yield z, tile.x, tile.y, webp
@@ -406,9 +449,19 @@ def generate_aggregated_tiles(
 
 def main() -> None:
     args = parse_args()
+    if not args.sources:
+        raise SystemExit("At least one source name is required")
 
-    records = load_bounds(args.source_name)
-    print(f"Loaded metadata for {len(records)} GeoTIFF files")
+    # 1段階目実装では、先頭のソースのみを使用（多段ロジックは今後追加）
+    primary_source = args.sources[0]
+    if len(args.sources) > 1:
+        print(
+            "Warning: multiple sources given (" + ", ".join(args.sources) + \
+            "); currently only the first one is used (" + primary_source + ")"
+        )
+
+    records = load_bounds(primary_source)
+    print(f"Loaded metadata for {len(records)} GeoTIFF files from '{primary_source}'")
 
     finest_pixel_size = min(r.pixel_size for r in records)
     auto_max_zoom = recommended_max_zoom(finest_pixel_size)
@@ -427,8 +480,13 @@ def main() -> None:
 
     bbox = tuple(args.bbox) if args.bbox else None
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # 出力の設計:
+    #   - ユーザは最終PMTilesパス（例: output/fusi.pmtiles）を指定
+    #   - Python側では同じベース名で .mbtiles に差し替えたものを
+    #     MBTiles の実ファイルとして使う
+    pmtiles_path = Path(args.output)
+    mbtiles_path = pmtiles_path.with_suffix(".mbtiles")
+    mbtiles_path.parent.mkdir(parents=True, exist_ok=True)
 
     tiles = generate_aggregated_tiles(
         records=records,
@@ -441,11 +499,13 @@ def main() -> None:
         warp_threads=args.warp_threads,
     )
 
-    create_pmtiles(
-        tiles,
-        output_path,
-        fsync_interval_tiles=args.fsync_interval_tiles,
-    )
+    # For now we ignore fsync_interval_tiles here, because SQLite already
+    # handles durability, and we favor throughput on the external SSD.
+    print(f"Writing Terrarium WebP tiles into MBTiles: {mbtiles_path}")
+    create_mbtiles_from_tiles(tiles, mbtiles_path)
+
+    # PMTiles 変換は justfile 側で pmtiles CLI を用いて行う前提とする。
+    print(f"MBTiles ready: {mbtiles_path} (intended PMTiles: {pmtiles_path})")
 
 
 if __name__ == "__main__":
