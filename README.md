@@ -77,6 +77,29 @@ just aggregate bulk_all
 - `output/fusi.pmtiles` が生成されます（内部的に `output/fusi.mbtiles` → `pmtiles convert`）。
   
   補足: MBTiles の書き込みでは SQLite の WAL モードを使用します。長時間・大規模書き込み時に WAL ファイルが肥大化しないよう、内部で定期的に `PRAGMA wal_checkpoint(TRUNCATE)` を実行して `.wal` を短く保ち、処理完了時に `PRAGMA journal_mode=DELETE` に戻して `.wal/.shm` を削除する設計になっています。
+
+### 長崎県スモークテスト結果
+
+2025-11-26 に長崎県域（概算 bbox: `128.3,32.4,131.6,33.8`）で `--max-zoom 16` のスモークテストを実施しました。主要ポイントは以下の通りです。
+
+- タイル生成: 88,224 タイルを生成（候補 245,340 件のうち）
+- 中間 MBTiles: `output/nagasaki.mbtiles` を生成
+- PMTiles 変換: `pmtiles convert` による変換が正常完了（処理時間: 約 3 分 24 秒）
+- WAL/SHM: MBTiles 書き込みは WAL モードで行われたが、最終化処理により `.wal` は切り詰められ、`.shm` は短時間の共有メモリファイルとして残る場合がある
+
+このスモークテストは、MBTiles-first フロー（SQLite にストリーム挿入してから go-pmtiles で PMTiles に変換する方式）が実運用規模に耐えうることの初期確認になりました。フル生産を行う際は以下に注意してください。
+
+- 実行前に `df -h` で出力先ディスクの空き容量を十分に確保すること（数十 GB の余裕を推奨）。
+- `TMPDIR` は出力先（外付け SSD 等）に設定してシステムボリュームの ENOSPC を回避すること。`just` レシピは既定でこれを設定します。 
+- 長時間の書き込みでは WAL サイズを抑えるために `pipelines/mbtiles_writer.py` にて定期的な `wal_checkpoint(TRUNCATE)` を行っていますが、万一中断する場合は下記のチェックポイント/復旧コマンドを参考にしてください。
+
+チェックポイント（例）:
+
+```bash
+sqlite3 output/fusi.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;"
+```
+
+フル生産を開始する前にローカルで小さなサブセット（今回の長崎テストのような）を必ず実行し、ログを確認してから本番を回してください。
 - 別名で出力したい場合は `just aggregate -o output/bulk_all.pmtiles bulk_all` のように `-o/--output` で PMTiles パスを指定します。
 - `bounds.csv` から対象ファイルを抽出し、各タイルごとに再投影・モザイク・Terrarium エンコードを行います。
 - 標準出力にはズーム別の候補タイル数と進捗率に加え、フェーズログ（union bounds / coarse bucket 構築 / 候補数計測）が表示され、停滞の切り分けが容易です。
@@ -87,6 +110,42 @@ just aggregate bulk_all
   - `--io-sleep-ms 1`（タイルごとに1msスリープでI/Oに負圧）
   - `--progress-interval 200`（進捗ログの既定間隔）
   - `--verbose`（詳細ログを既定有効）
+
+## **本番全域の集約を開始する**
+
+準備ができている場合、以下の手順で本番全域の集約を開始できます。ここでは例として `dem1a` を対象・最大ズーム `16` に設定します。実行は出力先ディレクトリに十分な空き容量があり、外付け SSD を `output/` として使える前提です。
+
+1. 出力ディレクトリとログを作成しておく（`output/` が既にある場合は不要）:
+
+```bash
+mkdir -p output
+```
+
+1. 本番集約コマンド（推奨オプションを含む）。標準出力とエラーログを `tee` で `output/production-dem1a-aggregate.log` に保存します。実行中は `output/production-dem1a.mbtiles` がストリーム書き出され、完了後に `pmtiles convert` により `output/production-dem1a.pmtiles` が生成されます。
+
+```bash
+TMPDIR="$PWD/output" GDAL_CACHEMAX=512 \
+  just aggregate -o output/production-dem1a.pmtiles dem1a \
+    --max-zoom 16 --progress-interval 100 --io-sleep-ms 1 \
+    --warp-threads 1 --verbose 2>&1 | tee output/production-dem1a-aggregate.log
+```
+
+1. 実行後の検証（MBTiles 内に重複タイルがないかを確認）:
+
+```bash
+sqlite3 output/production-dem1a.mbtiles \
+  "SELECT COUNT(*) AS total_rows, COUNT(DISTINCT zoom_level || '-' || tile_column || '-' || tile_row) AS distinct_keys FROM tiles;"
+# 戻り値が "N|N" なら重複はありません。
+```
+
+1. サンプルタイルをいくつか点検して、低優先度ソースが上位ソースの nodata を埋めていることを確認します（ツール: `scripts/inspect_tile_fill.py`）。例:
+
+```bash
+python3 scripts/inspect_tile_fill.py --mbtiles output/production-dem1a.mbtiles --z 8 --x 220 --y 152 --sources dem1a dem10b
+```
+
+注意: 長時間実行になるため、途中で中断した場合は `sqlite3` にて `PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;` を実行して WAL を切り詰めてください。
+
 
 オプション（`just aggregate` 経由で `pipelines/aggregate_pmtiles.py` に渡ります）
 
