@@ -67,6 +67,8 @@ class SourceRecord:
     width: int
     height: int
     pixel_size: float
+    source: str
+    priority: int
 
     @property
     def bounds_mercator(self) -> Tuple[float, float, float, float]:
@@ -149,7 +151,7 @@ def recommended_max_zoom(pixel_size_m: float) -> int:
     return max(0, min(MAX_SUPPORTED_ZOOM, zoom))
 
 
-def load_bounds(source_name: str) -> List[SourceRecord]:
+def load_bounds(source_name: str, priority: int = 0) -> List[SourceRecord]:
     bounds_path = Path("source-store") / source_name / "bounds.csv"
     if not bounds_path.exists():
         raise FileNotFoundError(
@@ -198,6 +200,8 @@ def load_bounds(source_name: str) -> List[SourceRecord]:
                     width=width,
                     height=height,
                     pixel_size=pixel_size,
+                    source=source_name,
+                    priority=priority,
                 )
             )
 
@@ -245,15 +249,32 @@ def read_tile_from_source(
 
         destination = np.full(out_shape, np.nan, dtype=np.float32)
 
+        # Build explicit source mask to ensure NODATA propagates as NaN
+        try:
+            src_arr = src.read(1, masked=False).astype("float32")
+        except Exception as exc:
+            raise ValueError(f"Failed to read band from {record.path}: {exc}")
+
+        if src.nodata is not None:
+            valid_mask = src_arr != src.nodata
+            src_arr[~valid_mask] = np.nan
+        else:
+            # Use alpha/mask band if available
+            try:
+                valid_mask = src.read_masks(1) != 0
+            except Exception:
+                # Fallback: treat all as valid; outside bounds will still be NaN after reproject
+                valid_mask = np.ones_like(src_arr, dtype=bool)
+
         reproject(
-            source=rasterio.band(src, 1),
+            source=src_arr,
             destination=destination,
             src_transform=src.transform,
             src_crs=src.crs,
             dst_transform=tile_transform,
             dst_crs=EPSG_3857,
             resampling=Resampling.bilinear,
-            src_nodata=src.nodata,
+            source_mask=valid_mask.astype("uint8"),
             dst_nodata=np.nan,
             num_threads=max(1, int(warp_threads)),
         )
@@ -394,7 +415,8 @@ def generate_aggregated_tiles(
             if not overlapping:
                 continue
 
-            overlapping.sort(key=lambda r: r.pixel_size)
+            # Sort by source priority first (lower = higher priority), then finer pixel size
+            overlapping.sort(key=lambda r: (r.priority, r.pixel_size))
             tile_arrays: List[np.ndarray] = []
             for rec in overlapping:
                 try:
@@ -452,16 +474,12 @@ def main() -> None:
     if not args.sources:
         raise SystemExit("At least one source name is required")
 
-    # 1段階目実装では、先頭のソースのみを使用（多段ロジックは今後追加）
-    primary_source = args.sources[0]
-    if len(args.sources) > 1:
-        print(
-            "Warning: multiple sources given (" + ", ".join(args.sources) + \
-            "); currently only the first one is used (" + primary_source + ")"
-        )
-
-    records = load_bounds(primary_source)
-    print(f"Loaded metadata for {len(records)} GeoTIFF files from '{primary_source}'")
+    # Load bounds for all sources with priority by order
+    records: List[SourceRecord] = []
+    for prio, src_name in enumerate(args.sources):
+        recs = load_bounds(src_name, priority=prio)
+        records.extend(recs)
+        print(f"Loaded metadata for {len(recs)} GeoTIFF files from '{src_name}' (priority {prio})")
 
     finest_pixel_size = min(r.pixel_size for r in records)
     auto_max_zoom = recommended_max_zoom(finest_pixel_size)
