@@ -1,9 +1,9 @@
-# Justfile for fusi - Japanese elevation data to PMTiles converter
+# Justfile for fusi - Japanese elevation data to Terrarium tiles
 # Following mapterhorn methodology with Terrarium encoding
 #
 # Current pipeline:
 #   1. `just bounds <source>` to record GeoTIFF metadata
-#   2. `just aggregate <source>` to build Terrarium PMTiles (defaults to output/fusi.pmtiles)
+#   2. `just aggregate <source>` to build Terrarium MBTiles (defaults to output/fusi.mbtiles)
 
 source_dir := "source-store"
 output_dir := "output"
@@ -50,19 +50,68 @@ test-sample source_name:
     fi
     just convert "$first_file" "{{output_dir}}/sample.pmtiles"
 
-# 5. Aggregate: Merge multiple GeoTIFFs into one PMTiles (defaults to output/fusi.pmtiles)
-aggregate source_name output_file="output/fusi.pmtiles" *extra_args:
+# 5. Aggregate: Merge one or more sources into one MBTiles, then PMTiles
+#    (defaults: PMTiles=output/fusi.pmtiles, MBTiles=output/fusi.mbtiles)
+# Usage:
+#   just aggregate dem1a
+#   just aggregate dem1a dem10b
+#   just aggregate -o output/dem1a+dem10b.pmtiles dem1a dem10b
+aggregate *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    mkdir -p "$(dirname "{{output_file}}")"
-    # Default to spooling temp data on the output disk to avoid system volume pressure
-    export TMPDIR="$(cd "$(dirname "{{output_file}}")" && pwd)"
+
+    # Populate shell positional params from just's arguments
+    set -- {{args}}
+
+    if [ "$#" -lt 1 ]; then
+        echo "Usage: just aggregate <source...> [--options...]"
+        echo "  e.g. just aggregate dem1a"
+        echo "       just aggregate dem1a dem10b"
+        echo "       just aggregate -o output/dem1a+dem10b.pmtiles dem1a dem10b"
+        exit 1
+    fi
+
+    # Default output directory used for TMPDIR when not overridden by -o/--output
+    mkdir -p "{{output_dir}}"
+    export TMPDIR="$(cd "{{output_dir}}" && pwd)"
     # Keep GDAL cache modest unless overridden by user
     export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
-    # Turn on verbose by default; users can add --quiet via extra_args if needed
-    pipenv run python pipelines/aggregate_pmtiles.py \
-        "{{source_name}}" "{{output_file}}" \
-        --verbose {{extra_args}}
+
+    # Pass everything through to the Python CLI。
+    # Python側で:
+    #   -o/--output で「最終的な PMTiles パス」を決める（デフォルト: output/fusi.pmtiles）
+    #   内部では同名で拡張子を .mbtiles にしたファイルに MBTiles を書く
+    #   位置引数 sources... で dem1a dem10b ... を受け取る
+
+    # PMTiles/MBTiles パスを決定（-o/--output があれば尊重）
+    pmtiles_path="{{output_dir}}/fusi.pmtiles"
+    i=1
+    while [ $i -le "$#" ]; do
+        arg="${!i}"
+        if [ "$arg" = "-o" ] || [ "$arg" = "--output" ]; then
+            j=$((i + 1))
+            if [ $j -le "$#" ]; then
+                pmtiles_path="${!j}"
+            fi
+            break
+        fi
+        i=$((i + 1))
+    done
+
+    mbtiles_path="${pmtiles_path%.pmtiles}.mbtiles"
+
+    pipenv run python -u pipelines/aggregate_pmtiles.py \
+        --verbose \
+        "$@"
+
+    # MBTiles → PMTiles 変換
+    if command -v pmtiles >/dev/null 2>&1; then
+        echo "Converting MBTiles to PMTiles: $mbtiles_path -> $pmtiles_path"
+        pmtiles convert "$mbtiles_path" "$pmtiles_path"
+    else
+        echo "Warning: 'pmtiles' command not found; skipping PMTiles conversion."
+        echo "         MBTiles is available at: $mbtiles_path"
+    fi
 
 # 6. Clean: Remove output directory
 clean:
