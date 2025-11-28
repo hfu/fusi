@@ -37,7 +37,7 @@ from rasterio.enums import Resampling
 from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.warp import transform_bounds, reproject
 
-import imagecodecs
+from . import imagecodecs
 
 try:  # Allow running as a module or script
     from .convert_terrarium import encode_terrarium

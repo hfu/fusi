@@ -235,10 +235,10 @@ fusi/
 │       ├── *.tif
 │       └── bounds.csv        # just bounds で生成
 ├── output/                   # 変換結果 MBTiles / PMTiles
-├── pipelines/
+├── pipelines/                # コア処理モジュール（ライブラリ的に再利用）
 │   ├── source_bounds.py      # bounds.csv 作成
-│   ├── convert_terrarium.py  # 単一 GeoTIFF → PMTiles
-│   ├── aggregate_pmtiles.py  # 複数 GeoTIFF → MBTiles 集約（+ pmtiles convert）
+│   ├── convert_terrarium.py  # 単一 GeoTIFF → PMTiles（ライブラリ関数 + CLI）
+│   ├── aggregate_pmtiles.py  # 複数 GeoTIFF → MBTiles 集約（生成器 / ライブラリ関数）
 │   ├── mbtiles_writer.py     # Terrarium WebP タイルを MBTiles に書き出すヘルパ
 │   └── inspect_pmtiles.py    # PMTiles のヘッダ確認
 ├── justfile                  # タスクランナー定義
@@ -246,6 +246,12 @@ fusi/
 ├── IMPLEMENTATION_SUMMARY.md
 └── README.md
 ```
+
+役割の明確化:
+
+- `pipelines/`: ライブラリ的なコア処理（再投影、モザイク、エンコード、MBTiles 書き出し）を置きます。ユニットテストや他スクリプトからインポートして利用できる形で実装しています。
+- `scripts/`: 1回実行のユーティリティや検査スクリプト（例: `scripts/inspect_tile_fill.py`）を置きます。`scripts/` 内のスクリプトは `pipelines` の関数を呼んで薄いラッパーにする方針です。
+
 
 ## ロードマップ
 

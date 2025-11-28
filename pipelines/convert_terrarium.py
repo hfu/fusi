@@ -21,7 +21,7 @@ import rasterio
 from rasterio.warp import reproject, calculate_default_transform, Resampling
 from rasterio.io import MemoryFile
 import mercantile
-import imagecodecs
+from . import imagecodecs
 from pmtiles.tile import zxy_to_tileid, TileType, Compression
 from pmtiles.writer import Writer
 
