@@ -1,104 +1,9 @@
 #!/usr/bin/env python3
-"""Convert MBTiles -> PMTiles using pmtiles.writer, ensuring correct TMS<->XYZ handling.
+"""Convert an MBTiles file to PMTiles using the Python `pmtiles` writer.
 
-This script reads all entries from an MBTiles file, converts tile_row (TMS)
-to XYZ y, computes tile_id via zxy_to_tileid, sorts by tile_id and writes a
-PMTiles archive. It also prints a short sample of mappings for verification.
-"""
-from __future__ import annotations
-
-import sqlite3
-from pathlib import Path
-from typing import List, Tuple
-
-from pmtiles.tile import zxy_to_tileid, TileType, Compression
-from pmtiles.writer import Writer
-import mercantile
-
-
-def read_mbtiles_entries(path: Path) -> List[Tuple[int,int,int,bytes]]:
-    conn = sqlite3.connect(str(path))
-    cur = conn.cursor()
-    cur.execute('SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles')
-    out = []
-    for z, x, tile_row, data in cur:
-        y = (1 << z) - 1 - tile_row
-        out.append((z, x, y, data))
-    conn.close()
-    return out
-
-
-def write_pmtiles(entries: List[Tuple[int,int,int,bytes]], out_path: Path) -> None:
-    # compute bounds and zoom range
-    min_z = min(e[0] for e in entries)
-    max_z = max(e[0] for e in entries)
-    min_lon = min(mercantile.bounds(x,y,z).west for z,x,y,_ in entries)
-    min_lat = min(mercantile.bounds(x,y,z).south for z,x,y,_ in entries)
-    max_lon = max(mercantile.bounds(x,y,z).east for z,x,y,_ in entries)
-    max_lat = max(mercantile.bounds(x,y,z).north for z,x,y,_ in entries)
-
-    tiles_with_id = [(zxy_to_tileid(z,x,y), (z,x,y,data)) for (z,x,y,data) in entries]
-    tiles_with_id.sort(key=lambda t: t[0])
-
-    with open(out_path, 'wb') as f:
-        writer = Writer(f)
-        for tile_id, (zxy, xyz_data) in zip([t[0] for t in tiles_with_id], [t[1] for t in tiles_with_id]):
-            # our tiles_with_id already contains ((z,x,y), data) in second element by construction above
-            pass
-
-    # Simpler loop to write using sorted list
-    with open(out_path, 'wb') as f:
-        writer = Writer(f)
-        for tile_id, (z, x, y, data) in tiles_with_id:
-            writer.write_tile(tile_id, data)
-
-        writer.finalize(
-            {
-                'tile_type': TileType.WEBP,
-                'tile_compression': Compression.NONE,
-                'min_zoom': int(min_z),
-                'max_zoom': int(max_z),
-                'min_lon_e7': int(min_lon * 1e7),
-                'min_lat_e7': int(min_lat * 1e7),
-                'max_lon_e7': int(max_lon * 1e7),
-                'max_lat_e7': int(max_lat * 1e7),
-                'center_zoom': int(0.5 * (min_z + max_z)),
-                'center_lon_e7': int(0.5 * (min_lon * 1e7 + max_lon * 1e7)),
-                'center_lat_e7': int(0.5 * (min_lat * 1e7 + max_lat * 1e7)),
-            },
-            {
-                'attribution': '国土地理院 (GSI Japan)',
-                'encoding': 'terrarium',
-            },
-        )
-
-
-def main():
-    import argparse
-    p = argparse.ArgumentParser()
-    p.add_argument('mbtiles')
-    p.add_argument('pmtiles')
-    args = p.parse_args()
-
-    mb = Path(args.mbtiles)
-    pm = Path(args.pmtiles)
-    entries = read_mbtiles_entries(mb)
-    print(f"Read {len(entries)} entries from {mb}")
-    # print sample mappings
-    for z,x,y,_ in entries[:5]:
-        print(f"sample tile xyz={z}/{x}/{y}")
-    write_pmtiles(entries, pm)
-    print(f"Wrote PMTiles to {pm}")
-
-
-if __name__ == '__main__':
-    main()
-#!/usr/bin/env python3
-"""Convert an MBTiles file to PMTiles using the Python pmtiles writer.
-
-This is a small utility to avoid depending on an external `pmtiles` CLI
-for smoke tests. It streams tiles from MBTiles (SQLite) and writes them
-into a PMTiles archive using the pmtiles Python writer.
+This utility is intended as an optional fallback when the `pmtiles convert`
+CLI (go-pmtiles) is not available. It streams tiles from MBTiles (SQLite)
+and writes them into a PMTiles archive using the Python `pmtiles.writer`.
 """
 from __future__ import annotations
 
@@ -152,7 +57,6 @@ def mbtiles_to_pmtiles(mbtiles_path: Path, pmtiles_path: Path) -> None:
             writer.write_tile(tile_id, data)
 
         # Finalize metadata
-        # Best-effort: use metadata from MBTiles if available, otherwise leave defaults
         meta_out = {
             'tile_type': 'webp',
             'tile_compression': 'none',
@@ -176,7 +80,7 @@ def mbtiles_to_pmtiles(mbtiles_path: Path, pmtiles_path: Path) -> None:
     conn.close()
 
 
-def main(argv):
+def main(argv: list[str]) -> None:
     if len(argv) != 3:
         print("Usage: mbtiles_to_pmtiles.py input.mbtiles output.pmtiles")
         raise SystemExit(2)
