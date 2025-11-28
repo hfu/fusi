@@ -155,6 +155,7 @@ elevation = (R × 256 + G + B / 256) - 32768
 ## Testing
 
 ### Test Coverage
+
 - ✅ Bounds generation (1 test file)
 - ✅ Terrarium encoding/decoding round-trip
 - ✅ PMTiles creation (18 MB test output)
@@ -165,6 +166,7 @@ elevation = (R × 256 + G + B / 256) - 32768
 - ✅ Example script end-to-end
 
 ### Security
+
 - ✅ CodeQL scan passed (0 alerts)
 - ✅ No secrets in code
 - ✅ Safe path handling
@@ -195,17 +197,22 @@ elevation = (R × 256 + G + B / 256) - 32768
 ## Future Enhancements (Out of Scope)
 
 The following mapterhorn features could be added later:
+
 - Aggregation pipeline (multiple GeoTIFF → single PMTiles with blending)
 - Downsampling pipeline (overview generation)
 - Macrotile-based processing for large datasets
 - Bundle generation for planet-scale datasets
 
 ## Notes for Operators
+
 - When running `just aggregate` for full production, ensure `TMPDIR` is
   pointed at the output volume (external SSD) to avoid system-volume ENOSPC.
 - Monitor `output/*.mbtiles` `.wal/.shm` during long runs; the writer now
   automatically checkpoints periodically but manual checkpoints are safe:
-  `sqlite3 output/foo.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;"`
+
+```bash
+sqlite3 output/foo.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;"
+```
 
 ## References
 
