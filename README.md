@@ -75,7 +75,15 @@ just aggregate bulk_all
 ```
 
 - `output/fusi.pmtiles` が生成されます（内部的に `output/fusi.mbtiles` → `pmtiles convert`）。
-  
+
+ 代替: モジュールとして直接起動することもできます（`just` を介さずに実行する場合）。
+
+```bash
+python3 -m pipelines.aggregate_pmtiles -o output/fusi.pmtiles bulk_all
+```
+
+注意: 既存の MBTiles を上書きしたい場合は `--overwrite` を付けてください（デフォルトでは上書きを拒否します）。
+
   補足: MBTiles の書き込みでは SQLite の WAL モードを使用します。長時間・大規模書き込み時に WAL ファイルが肥大化しないよう、内部で定期的に `PRAGMA wal_checkpoint(TRUNCATE)` を実行して `.wal` を短く保ち、処理完了時に `PRAGMA journal_mode=DELETE` に戻して `.wal/.shm` を削除する設計になっています。
 
 ### 長崎県スモークテスト結果
@@ -90,7 +98,7 @@ just aggregate bulk_all
 このスモークテストは、MBTiles-first フロー（SQLite にストリーム挿入してから go-pmtiles で PMTiles に変換する方式）が実運用規模に耐えうることの初期確認になりました。フル生産を行う際は以下に注意してください。
 
 - 実行前に `df -h` で出力先ディスクの空き容量を十分に確保すること（数十 GB の余裕を推奨）。
-- `TMPDIR` は出力先（外付け SSD 等）に設定してシステムボリュームの ENOSPC を回避すること。`just` レシピは既定でこれを設定します。 
+- `TMPDIR` は出力先（外付け SSD 等）に設定してシステムボリュームの ENOSPC を回避すること。`just` レシピは既定でこれを設定します。
 - 長時間の書き込みでは WAL サイズを抑えるために `pipelines/mbtiles_writer.py` にて定期的な `wal_checkpoint(TRUNCATE)` を行っていますが、万一中断する場合は下記のチェックポイント/復旧コマンドを参考にしてください。
 
 チェックポイント（例）:
@@ -100,6 +108,7 @@ sqlite3 output/fusi.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mod
 ```
 
 フル生産を開始する前にローカルで小さなサブセット（今回の長崎テストのような）を必ず実行し、ログを確認してから本番を回してください。
+
 - 別名で出力したい場合は `just aggregate -o output/bulk_all.pmtiles bulk_all` のように `-o/--output` で PMTiles パスを指定します。
 - `bounds.csv` から対象ファイルを抽出し、各タイルごとに再投影・モザイク・Terrarium エンコードを行います。
 - 標準出力にはズーム別の候補タイル数と進捗率に加え、フェーズログ（union bounds / coarse bucket 構築 / 候補数計測）が表示され、停滞の切り分けが容易です。
