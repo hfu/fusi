@@ -62,7 +62,8 @@ class MBTilesWriter:
                 zoom_level INTEGER,
                 tile_column INTEGER,
                 tile_row INTEGER,
-                tile_data BLOB
+                tile_data BLOB,
+                UNIQUE(zoom_level, tile_column, tile_row)
             );
 
             CREATE INDEX IF NOT EXISTS idx_tiles_zxy
@@ -100,7 +101,7 @@ class MBTilesWriter:
 
             if len(batch) >= batch_size:
                 cur.executemany(
-                    "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?)",
                     batch,
                 )
                 self.conn.commit()
@@ -115,7 +116,7 @@ class MBTilesWriter:
 
         if batch:
             cur.executemany(
-                "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?)",
                 batch,
             )
             self.conn.commit()
@@ -182,6 +183,20 @@ def create_mbtiles_from_tiles(
     """
 
     import json
+
+    # If the MBTiles already exists, remove it first to avoid accidental
+    # appending duplicates from previous runs. If you want to preserve the
+    # existing file, move it aside before calling this function.
+    try:
+        if output_path.exists():
+            backup = output_path.with_suffix(output_path.suffix + ".bak")
+            output_path.rename(backup)
+    except Exception:
+        # If renaming fails, fall back to removing the file
+        try:
+            output_path.unlink()
+        except Exception:
+            pass
 
     writer = MBTilesWriter(output_path)
 
