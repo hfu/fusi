@@ -129,13 +129,20 @@ elevation = (R × 256 + G + B / 256) - 32768
 
 ### Advantages Over Previous Implementation
 
-1. **No External Tools**: Eliminated dependency on rio-rgbify and go-pmtiles CLI
+1. **Reduced external tool reliance**: Eliminated dependency on `rio-rgbify`; the
+  pipeline still uses the `go-pmtiles`/`pmtiles convert` CLI for final PMTiles
+  packing (preferred for performance). A pure-Python `pmtiles.writer` helper
+  is provided as an optional fallback when the CLI is not available.
 2. **Mapterhorn Compatible**: Full compatibility with mapterhorn ecosystem
 3. **Better Resolution**: Zoom-dependent vertical resolution reduces file size
 4. **Wider Range**: -32768m to +32767m (vs -10000m to +6553.5m in Mapbox)
 5. **Lossless**: WebP lossless encoding preserves all data
 6. **Simpler Pipeline**: 2 stages instead of 3 tools
-7. **Pure Python**: All processing in Python for easier maintenance
+7. **Mostly Python**: The tiling, reprojection, and Terrarium encoding
+  processing is implemented in Python for maintainability. Final packing into
+  a PMTiles archive is usually performed by the external `pmtiles convert`
+  CLI; an optional Python writer helper exists for environments that prefer not
+  to install the CLI.
 
 8. **MBTiles-first/pmtiles convert**: Stream tiles into MBTiles (SQLite)
   to avoid an in-memory/spool sort before packaging; offload final pack to
