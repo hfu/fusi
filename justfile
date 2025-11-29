@@ -100,8 +100,9 @@ aggregate *args:
 
     mbtiles_path="${pmtiles_path%.pmtiles}.mbtiles"
 
-    pipenv run python -u pipelines/aggregate_pmtiles.py \
+    pipenv run python -u -m pipelines.aggregate_pmtiles \
         --verbose \
+        --emit-lineage \
         "$@"
 
     # MBTiles → PMTiles 変換

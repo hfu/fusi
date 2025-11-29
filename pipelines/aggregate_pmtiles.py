@@ -123,6 +123,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Suppress verbose logging during aggregation (default: verbose)",
     )
+    # Backwards-compatible `--verbose` flag: some wrappers (justfile)
+    # may still pass `--verbose`. Accept it and prefer explicit flags
+    # in this order: if `--verbose` is passed, force verbose; else if
+    # `--silent` is passed, disable verbose; otherwise verbose is on by default.
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--io-sleep-ms",
         type=int,
@@ -168,8 +177,12 @@ def parse_args() -> argparse.Namespace:
     if args.max_zoom is not None and args.min_zoom > args.max_zoom:
         parser.error("min_zoom cannot be larger than max_zoom")
 
-    # Provide a backwards-friendly `verbose` attribute for downstream code
-    args.verbose = not getattr(args, "silent", False)
+    # Resolve verbose/silent precedence: explicit --verbose wins, then
+    # --silent, otherwise verbose enabled by default
+    if getattr(args, "verbose", False):
+        args.verbose = True
+    else:
+        args.verbose = not getattr(args, "silent", False)
     return args
 
 
@@ -410,8 +423,10 @@ def generate_aggregated_tiles(
     io_sleep_ms: int = 0,
     warp_threads: int = 1,
 ) -> Generator[Tuple[int, int, int, bytes], None, None]:
-    # Track start time for ETA calculations and timestamped verbose logs
-    start_time = time.time()
+    # start_time will be set once the planned tile scan is known. This
+    # avoids inflating ETA by including earlier setup (bounds/buckets)
+    # phases in the measured processing rate.
+    start_time: Optional[float] = None
 
     print("[phase] Computing union bounds...")
     union_left, union_bottom, union_right, union_top = union_bounds(records)
@@ -489,6 +504,10 @@ def generate_aggregated_tiles(
 
     checked_tiles = 0
     emitted_tiles = 0
+
+    # Begin timing here so setup phases (bucket building, counting) don't
+    # distort the early ETA estimate.
+    start_time = time.time()
 
     for z in range(min_zoom, max_zoom + 1):
         if verbose:
@@ -748,6 +767,18 @@ def run_aggregate(
 
             print(f"Writing lineage MBTiles: {lineage_path}")
             _create_mbtiles_for_lineage(lineage_generator(), lineage_path)
+            # Ensure the lineage MBTiles is annotated as such in metadata
+            try:
+                from .mbtiles_writer import MBTilesWriter
+
+                try:
+                    mw = MBTilesWriter(lineage_path)
+                    mw.update_metadata({"encoding": "lineage"})
+                except Exception:
+                    # Non-fatal: metadata update best-effort
+                    pass
+            except Exception:
+                pass
             # Also attempt to convert lineage MBTiles to PMTiles
             try:
                 lineage_pm = pmtiles_path.with_name(pmtiles_path.stem + f"{lineage_suffix}.pmtiles")
