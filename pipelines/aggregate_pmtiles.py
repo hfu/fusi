@@ -27,8 +27,9 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Generator, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Generator, Iterable, List, Optional, Sequence, Tuple, Union
 import time
+from io import BytesIO
 
 import mercantile
 import numpy as np
@@ -38,6 +39,8 @@ from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.warp import transform_bounds, reproject
 
 from . import imagecodecs
+import shutil
+import subprocess
 
 try:  # Allow running as a module or script
     from .convert_terrarium import encode_terrarium
@@ -53,6 +56,15 @@ EARTH_CIRCUMFERENCE_M = 40075016.68557849
 REFERENCE_TILE_SIZE = 512
 BASE_RESOLUTION_M = EARTH_CIRCUMFERENCE_M / REFERENCE_TILE_SIZE
 MAX_SUPPORTED_ZOOM = 17
+
+__all__ = [
+    "generate_aggregated_tiles",
+    "build_records_from_sources",
+    "compute_max_zoom_for_records",
+    "run_aggregate",
+    "merge_tile_candidates_with_provenance",
+    "compute_tile_provenance",
+]
 
 
 @dataclass(frozen=True)
@@ -107,9 +119,9 @@ def parse_args() -> argparse.Namespace:
         help="Tile interval for printing progress updates",
     )
     parser.add_argument(
-        "--verbose",
+        "--silent",
         action="store_true",
-        help="Increase logging verbosity during aggregation",
+        help="Suppress verbose logging during aggregation (default: verbose)",
     )
     parser.add_argument(
         "--io-sleep-ms",
@@ -130,6 +142,21 @@ def parse_args() -> argparse.Namespace:
         help="Number of threads for raster warping (reproject). Use 1 to reduce I/O pressure",
     )
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing MBTiles output if present (default: fail to avoid data loss)",
+    )
+    parser.add_argument(
+        "--emit-lineage",
+        action="store_true",
+        help="Emit per-tile lineage MBTiles as a byproduct (writes a separate .lineage.mbtiles)",
+    )
+    parser.add_argument(
+        "--lineage-suffix",
+        default="-lineage",
+        help="Suffix to append to MBTiles basename for lineage output (default: '-lineage')",
+    )
+    parser.add_argument(
         "sources",
         nargs="+",
         help="One or more source names under source-store/ (priority order)",
@@ -141,6 +168,8 @@ def parse_args() -> argparse.Namespace:
     if args.max_zoom is not None and args.min_zoom > args.max_zoom:
         parser.error("min_zoom cannot be larger than max_zoom")
 
+    # Provide a backwards-friendly `verbose` attribute for downstream code
+    args.verbose = not getattr(args, "silent", False)
     return args
 
 
@@ -301,6 +330,74 @@ def merge_tile_candidates(candidates: Iterable[np.ndarray]) -> Optional[np.ndarr
             merged = np.where(mask, data, merged)
 
     return merged
+
+
+def merge_tile_candidates_with_provenance(candidates: Iterable[Tuple[int, np.ndarray]]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Merge candidates while tracking per-pixel provenance.
+
+    candidates: Iterable of (source_index, ndarray) where source_index is
+    an integer representing source priority (0 = highest priority).
+
+    Returns (merged_array, provenance_mask) where provenance_mask has the
+    same shape as merged_array and contains the source_index that contributed
+    each pixel, or -1 for nodata.
+    """
+    merged: Optional[np.ndarray] = None
+    provenance: Optional[np.ndarray] = None
+
+    for src_idx, data in candidates:
+        if data is None:
+            continue
+
+        if merged is None:
+            merged = data.copy()
+            provenance = np.full(data.shape, fill_value=src_idx, dtype=np.int16)
+            # mark NaNs as nodata provenance
+            provenance[np.isnan(merged)] = -1
+            continue
+
+        mask = np.isnan(merged) & ~np.isnan(data)
+        if np.any(mask):
+            merged = np.where(mask, data, merged)
+            provenance[mask] = src_idx
+
+    if merged is None:
+        return None, None
+    # Ensure any remaining NaN provenance is -1
+    if provenance is not None:
+        provenance[np.isnan(merged)] = -1
+
+    return merged, provenance
+
+
+def compute_tile_provenance(
+    overlapping_records: Sequence[SourceRecord],
+    tile_bounds_mercator: mercantile.TileBoundingBox,
+    out_shape: Tuple[int, int],
+    warp_threads: int = 1,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Read overlapping records for a tile and compute merged elevation and provenance mask.
+
+    Returns (merged_elevation, provenance_mask) where provenance_mask uses
+    source priority indices (0 = highest priority) and -1 = nodata.
+    """
+    arrays: List[Tuple[int, np.ndarray]] = []
+    for rec in overlapping_records:
+        try:
+            data = read_tile_from_source(rec, tile_bounds_mercator, out_shape=out_shape, warp_threads=warp_threads)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"Warning: {exc}")
+            data = None
+        if data is not None:
+            arrays.append((rec.priority, data))
+
+    if not arrays:
+        return None, None
+
+    # Sort by priority then pixel size was already done upstream; ensure order by priority
+    arrays.sort(key=lambda t: (t[0],))
+    merged, provenance = merge_tile_candidates_with_provenance(arrays)
+    return merged, provenance
 
 
 def generate_aggregated_tiles(
@@ -474,12 +571,7 @@ def main() -> None:
     if not args.sources:
         raise SystemExit("At least one source name is required")
 
-    # Load bounds for all sources with priority by order
-    records: List[SourceRecord] = []
-    for prio, src_name in enumerate(args.sources):
-        recs = load_bounds(src_name, priority=prio)
-        records.extend(recs)
-        print(f"Loaded metadata for {len(recs)} GeoTIFF files from '{src_name}' (priority {prio})")
+    records = build_records_from_sources(args.sources)
 
     finest_pixel_size = min(r.pixel_size for r in records)
     auto_max_zoom = recommended_max_zoom(finest_pixel_size)
@@ -498,16 +590,11 @@ def main() -> None:
 
     bbox = tuple(args.bbox) if args.bbox else None
 
-    # 出力の設計:
-    #   - ユーザは最終PMTilesパス（例: output/fusi.pmtiles）を指定
-    #   - Python側では同じベース名で .mbtiles に差し替えたものを
-    #     MBTiles の実ファイルとして使う
     pmtiles_path = Path(args.output)
-    mbtiles_path = pmtiles_path.with_suffix(".mbtiles")
-    mbtiles_path.parent.mkdir(parents=True, exist_ok=True)
 
-    tiles = generate_aggregated_tiles(
+    run_aggregate(
         records=records,
+        output_pmtiles=pmtiles_path,
         min_zoom=args.min_zoom,
         max_zoom=max_zoom,
         bbox_wgs84=bbox,
@@ -515,15 +602,174 @@ def main() -> None:
         verbose=args.verbose,
         io_sleep_ms=args.io_sleep_ms,
         warp_threads=args.warp_threads,
+        overwrite=args.overwrite,
+        emit_lineage=args.emit_lineage,
+        lineage_suffix=args.lineage_suffix,
     )
 
-    # For now we ignore fsync_interval_tiles here, because SQLite already
-    # handles durability, and we favor throughput on the external SSD.
+
+def build_records_from_sources(sources: Sequence[str]) -> List[SourceRecord]:
+    """Load and return a flattened list of SourceRecord objects for the
+    provided ordered `sources` sequence. The order of `sources` defines
+    priority: earlier entries have higher priority (lower `priority` value).
+    """
+    records: List[SourceRecord] = []
+    for prio, src_name in enumerate(sources):
+        recs = load_bounds(src_name, priority=prio)
+        records.extend(recs)
+        print(f"Loaded metadata for {len(recs)} GeoTIFF files from '{src_name}' (priority {prio})")
+    return records
+
+
+def compute_max_zoom_for_records(records: Sequence[SourceRecord], user_max_zoom: Optional[int] = None) -> int:
+    """Compute a sensible max zoom for the given records, honoring a
+    user-specified `user_max_zoom` if provided.
+    """
+    finest_pixel_size = min(r.pixel_size for r in records)
+    auto_max_zoom = recommended_max_zoom(finest_pixel_size)
+    return user_max_zoom if user_max_zoom is not None else auto_max_zoom
+
+
+def run_aggregate(
+    records: Sequence[SourceRecord],
+    output_pmtiles: Union[str, Path],
+    min_zoom: int,
+    max_zoom: int,
+    bbox_wgs84: Optional[Tuple[float, float, float, float]] = None,
+    progress_interval: int = 500,
+    verbose: bool = False,
+    io_sleep_ms: int = 0,
+    warp_threads: int = 1,
+    overwrite: bool = False,
+    emit_lineage: bool = False,
+    lineage_suffix: str = "-lineage",
+) -> Path:
+    """Run the aggregation for prepared `records` and write tiles into an
+    MBTiles file alongside the intended `output_pmtiles` path. Returns the
+    path to the created MBTiles file.
+    """
+    pmtiles_path = Path(output_pmtiles)
+    mbtiles_path = pmtiles_path.with_suffix(".mbtiles")
+    mbtiles_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if mbtiles_path.exists() and not overwrite:
+        raise SystemExit(
+            f"Refusing to overwrite existing MBTiles: {mbtiles_path}. Use --overwrite to allow replacing it."
+        )
+
+    tiles = generate_aggregated_tiles(
+        records=records,
+        min_zoom=min_zoom,
+        max_zoom=max_zoom,
+        bbox_wgs84=bbox_wgs84,
+        progress_interval=progress_interval,
+        verbose=verbose,
+        io_sleep_ms=io_sleep_ms,
+        warp_threads=warp_threads,
+    )
+
     print(f"Writing Terrarium WebP tiles into MBTiles: {mbtiles_path}")
     create_mbtiles_from_tiles(tiles, mbtiles_path)
 
-    # PMTiles 変換は justfile 側で pmtiles CLI を用いて行う前提とする。
     print(f"MBTiles ready: {mbtiles_path} (intended PMTiles: {pmtiles_path})")
+    # Attempt to convert MBTiles to PMTiles automatically using external
+    # `pmtiles` CLI when available; fall back to Python packer if not.
+    try:
+        pmtiles_exe = shutil.which("pmtiles") or shutil.which("pmtiles-cli")
+        if pmtiles_exe:
+            print(f"Converting MBTiles to PMTiles via: {pmtiles_exe} convert {mbtiles_path} {pmtiles_path}")
+            subprocess.check_call([pmtiles_exe, "convert", str(mbtiles_path), str(pmtiles_path)])
+            print(f"PMTiles created: {pmtiles_path}")
+        else:
+            # Try Python fallback if available in package
+            try:
+                from .mbtiles_to_pmtiles import mbtiles_to_pmtiles as pm_fallback
+
+                print("pmtiles CLI not found; using Python fallback packer")
+                pm_fallback(mbtiles_path, pmtiles_path)
+                print(f"PMTiles created via Python fallback: {pmtiles_path}")
+            except Exception:
+                print("Warning: no pmtiles CLI found and Python fallback unavailable; PMTiles not created")
+    except Exception as exc:
+        print(f"Warning: PMTiles conversion failed: {exc}")
+    # Optionally emit lineage MBTiles as a byproduct. This is run after the
+    # main MBTiles creation to avoid complicating the main tile-generation
+    # loop. It is intentionally optional because it requires re-reading
+    # source rasters and can be I/O intensive.
+    if emit_lineage:
+        try:
+            from .lineage import provenance_to_rgb
+            from . import imagecodecs
+            import sqlite3
+            import mercantile
+
+            lineage_path = mbtiles_path.with_name(mbtiles_path.stem + f"{lineage_suffix}.mbtiles")
+
+            def lineage_generator():
+                # Read the list of written tiles from the primary MBTiles
+                conn = sqlite3.connect(str(mbtiles_path))
+                try:
+                    cur = conn.execute("SELECT zoom_level, tile_column, tile_row FROM tiles")
+                    for z, x, tms_y in cur:
+                        # Convert stored TMS row back to XYZ y
+                        y = (1 << z) - 1 - tms_y
+                        tile = mercantile.Tile(x=x, y=y, z=z)
+                        bounds = mercantile.xy_bounds(tile)
+                        # Filter overlapping records to reduce work
+                        overlapping = [r for r in records if intersects(r.bounds_mercator, (bounds.left, bounds.bottom, bounds.right, bounds.top))]
+                        if not overlapping:
+                            continue
+
+                        merged, provenance = compute_tile_provenance(overlapping, bounds, out_shape=(512, 512), warp_threads=warp_threads)
+                        if provenance is None:
+                            continue
+
+                        rgb = provenance_to_rgb(provenance)
+                        try:
+                            webp = imagecodecs.webp_encode(rgb, lossless=True)
+                        except Exception:
+                            # Fallback: encode PNG via Pillow
+                            from PIL import Image
+
+                            img = Image.fromarray(rgb)
+                            bio = BytesIO()
+                            img.save(bio, format="PNG")
+                            webp = bio.getvalue()
+
+                        yield z, x, y, webp
+                finally:
+                    conn.close()
+
+            # Write lineage MBTiles. Import into a different local name to
+            # avoid shadowing the module-level `create_mbtiles_from_tiles`
+            # symbol which would make it a local variable for the whole
+            # function and cause UnboundLocalError earlier when called.
+            from .mbtiles_writer import create_mbtiles_from_tiles as _create_mbtiles_for_lineage
+
+            print(f"Writing lineage MBTiles: {lineage_path}")
+            _create_mbtiles_for_lineage(lineage_generator(), lineage_path)
+            # Also attempt to convert lineage MBTiles to PMTiles
+            try:
+                lineage_pm = pmtiles_path.with_name(pmtiles_path.stem + f"{lineage_suffix}.pmtiles")
+                if pmtiles_exe:
+                    print(f"Converting lineage MBTiles to PMTiles via: {pmtiles_exe} convert {lineage_path} {lineage_pm}")
+                    subprocess.check_call([pmtiles_exe, "convert", str(lineage_path), str(lineage_pm)])
+                    print(f"Lineage PMTiles created: {lineage_pm}")
+                else:
+                    try:
+                        from .mbtiles_to_pmtiles import mbtiles_to_pmtiles as pm_fallback2
+
+                        print("pmtiles CLI not found; using Python fallback packer for lineage")
+                        pm_fallback2(lineage_path, lineage_pm)
+                        print(f"Lineage PMTiles created via Python fallback: {lineage_pm}")
+                    except Exception:
+                        print("Warning: no pmtiles CLI found and Python fallback unavailable for lineage; lineage PMTiles not created")
+            except Exception as exc:
+                print(f"Warning: lineage PMTiles conversion failed: {exc}")
+        except Exception as exc:  # pragma: no cover - non-fatal optional step
+            print(f"Warning: failed to emit lineage MBTiles: {exc}")
+
+    return mbtiles_path
 
 
 if __name__ == "__main__":

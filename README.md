@@ -118,7 +118,7 @@ sqlite3 output/fusi.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mod
   - `--warp-threads 1`（再投影スレッドを1に抑制）
   - `--io-sleep-ms 1`（タイルごとに1msスリープでI/Oに負圧）
   - `--progress-interval 200`（進捗ログの既定間隔）
-  - `--verbose`（詳細ログを既定有効）
+  - 既定で詳細ログを有効化しています（`--silent` を指定すると抑制されます）
 
 ## **本番全域の集約を開始する**
 
@@ -136,7 +136,7 @@ mkdir -p output
 TMPDIR="$PWD/output" GDAL_CACHEMAX=512 \
   just aggregate -o output/production-dem1a.pmtiles dem1a \
     --max-zoom 16 --progress-interval 100 --io-sleep-ms 1 \
-    --warp-threads 1 --verbose 2>&1 | tee output/production-dem1a-aggregate.log
+    --warp-threads 1 2>&1 | tee output/production-dem1a-aggregate.log
 ```
 
 1. 実行後の検証（MBTiles 内に重複タイルがないかを確認）:
@@ -209,7 +209,7 @@ just convert <input> <output> [--min-zoom Z] [--max-zoom Z]
 just test-sample <source>         # 代表ファイルでの動作確認
 just aggregate <source...> [options]
   # -o/--output で PMTiles パスを指定（省略時は output/fusi.pmtiles）
-  # 既定で --verbose を有効化し、TMPDIR=output/ と GDAL_CACHEMAX=512 を設定
+  # 既定で詳細ログを有効化（`--silent` で抑制）し、TMPDIR=output/ と GDAL_CACHEMAX=512 を設定
 just inspect <pmtiles>            # PMTiles メタデータ閲覧
 just upload                       # output/fusi.pmtiles をリモートへ rsync
 just clean / clean-all            # 出力や bounds.csv を削除
