@@ -20,7 +20,7 @@ import mercantile
 
 
 class MBTilesWriter:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, extra_metadata: dict | None = None) -> None:
         self.path = Path(path)
         self.conn = sqlite3.connect(str(self.path))
         # Use WAL for better concurrent/writing performance, but keep
@@ -48,6 +48,8 @@ class MBTilesWriter:
         self._min_lat = math.inf
         self._max_lon = -math.inf
         self._max_lat = -math.inf
+        # Optional extra metadata entries to write at finalize
+        self._extra_metadata = extra_metadata or {}
 
     def _ensure_schema(self) -> None:
         cur = self.conn.cursor()
@@ -130,8 +132,11 @@ class MBTilesWriter:
     def finalize(self, min_zoom: int | None = None, max_zoom: int | None = None) -> None:
         """Write minimal metadata and close the database."""
 
-        if not math.isfinite(self._min_z) or not math.isfinite(self._max_z):
-            # No tiles written; nothing to finalize.
+        # If no tiles were written we still allow a graceful close. If the
+        # writer holds extra metadata entries, write them even if no tiles
+        # were written (useful when updating existing MBTiles).
+        wrote_tiles = math.isfinite(self._min_z) and math.isfinite(self._max_z)
+        if not wrote_tiles and not self._extra_metadata:
             self.conn.close()
             return
 
@@ -153,6 +158,11 @@ class MBTilesWriter:
             "encoding": "terrarium",
         }
 
+        # Merge in any extra metadata provided at construction time
+        if self._extra_metadata:
+            for k, v in self._extra_metadata.items():
+                metadata[str(k)] = str(v)
+
         cur = self.conn.cursor()
         cur.executemany(
             "INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)",
@@ -170,6 +180,25 @@ class MBTilesWriter:
                 self.conn.close()
             except Exception:
                 pass
+
+    def update_metadata(self, metadata: dict) -> None:
+        """Write or update metadata entries into the MBTiles `metadata` table.
+
+        This is provided for cases where an existing MBTiles file needs to be
+        annotated (for example, adding `encoding: lineage` after producing a
+        lineage MBTiles). Keys and values are cast to strings.
+        """
+
+        cur = self.conn.cursor()
+        items = [(str(k), str(v)) for k, v in metadata.items()]
+        cur.executemany(
+            "INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)",
+            items,
+        )
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
 
 
 def create_mbtiles_from_tiles(
