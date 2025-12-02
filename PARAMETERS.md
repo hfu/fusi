@@ -12,6 +12,7 @@
 6. [監視・ロギング](#監視ロギング)
 7. [実験／評価フロー](#実験評価フロー)
 8. [推奨プロファイル設定](#推奨プロファイル設定)
+9. [適用例](#適用例)
 
 ---
 
@@ -484,6 +485,84 @@ just aggregate dem1a dem5a dem10b \
   --fsync-interval-tiles 5000 \
   --progress-interval 100
 ```
+
+---
+
+## 適用例
+
+### M4 Mac mini (16GB RAM) + USB 3.0 SSD 環境
+
+**環境特性**
+- CPU: M4 チップ（高性能、8〜10コア）
+- RAM: 16GB（メモリ溢れに注意が必要）
+- ストレージ: USB 3.0 SSD 3TB（I/O がボトルネックになる可能性が高い）
+- 目標: 多少の速度向上を求めつつ、実行失敗を回避
+
+**パラメータ選定の推論**
+
+1. **GDAL_CACHEMAX=512**
+   - 16GB RAM 環境では 1024 は危険。OS（2〜3GB）+ Python プロセス（2〜3GB）+ ページキャッシュ（4〜6GB）を考慮すると、512MB が安全圏
+   - メモリ溢れのリスクを最小化しつつ、読み取りキャッシュの恩恵を受ける
+
+2. **--warp-threads 2**
+   - M4 の CPU パワーを活かしつつ、USB 3.0 SSD の I/O 競合を抑制
+   - warp-threads=1 では CPU が遊ぶが、4 では USB 3.0 の帯域（実効 200〜400 MB/s）を複数スレッドで奪い合い逆効果
+   - 2 スレッドで適度な並列性を確保しながら I/O キューの輻輳を回避
+
+3. **--io-sleep-ms 1**
+   - 完全に無効（0）にすると USB 3.0 コントローラが I/O バーストで飽和する危険
+   - 1ms の微小スリープで I/O を整流し、安定性を確保
+   - 処理時間への影響は軽微（全体の 0.1〜0.3% 程度）
+
+4. **--fsync-interval-tiles 10000**
+   - 20000 は高速ストレージ向けの設定。USB 3.0 では fsync の影響が大きいため、中間値が安全
+   - クラッシュ時の損失を約 100〜200MB 程度に抑える（タイル平均 10〜20KB 想定）
+
+5. **--progress-interval 1000**
+   - 進捗表示の頻度を適度に抑え、ログ出力による I/O への影響を軽減
+
+**推奨設定**
+
+```bash
+export TMPDIR="$PWD/output"
+export GDAL_CACHEMAX=512
+
+just aggregate dem1a dem5a dem10b \
+  --warp-threads 2 \
+  --io-sleep-ms 1 \
+  --fsync-interval-tiles 10000 \
+  --progress-interval 1000
+```
+
+**期待される効果**
+- 既定設定（warp-threads=1）から **10〜30% の処理時間短縮**を期待
+- メモリ使用量は 8〜10GB 程度で安定（スワップ発生なし）
+- USB 3.0 SSD の I/O スループットを 60〜80% 程度で安定稼働
+- 実行失敗のリスクを最小化
+
+**監視すべき指標**
+
+実行中は別ターミナルで以下を監視してください：
+
+```bash
+# メモリ使用量とスワップ（macOS）
+vm_stat 1
+
+# ディスク I/O（macOS）
+iostat -w 1
+
+# プロセスのメモリ使用量
+top -pid $(pgrep -f aggregate_pmtiles) -stats pid,command,mem
+```
+
+**トラブルシューティング**
+
+| 症状 | 原因 | 対処 |
+|------|------|------|
+| スワップ発生 | メモリ不足 | GDAL_CACHEMAX を 256 に削減 |
+| I/O 待ち（D 状態）多発 | USB 3.0 飽和 | --io-sleep-ms を 2 に増加 |
+| CPU 使用率 < 40% | スレッド不足 | --warp-threads を 3 に増加（様子見） |
+| fsync で長時間停止 | USB 3.0 書き込み遅延 | --fsync-interval-tiles を 15000 に増加 |
 
 ---
 
