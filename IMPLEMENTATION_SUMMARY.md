@@ -218,215 +218,77 @@ resolution (mapterhorn formula) before encoding.
 ## Testing
 
 ### Test Coverage
+---
+# Implementation Summary — fusi (Mapterhorn-style Terrain Pipeline)
 
-- Bounds generation (unit test)
-- Terrarium encode/decode round-trip
-- MBTiles → PMTiles conversion verification (small test fixture)
-- WAL checkpointing and finalize sequence (smoke test)
+このドキュメントは `fusi` の設計要旨、運用ポリシー、最近の変更点をまとめたものです。
 
-### Security
+## 概要
 
-- CodeQL scan passed (no alerts)
-- No embedded secrets
+`fusi` は複数の標高 GeoTIFF を受け取り、Terrarium タイル（512×512、Lossless WebP）を生成して最終的に PMTiles に梱包するためのパイプラインです。主な方針は「MBTiles-first」：タイルをまずストリーミングで `.mbtiles`（SQLite）に書き込み、その後 `pmtiles convert`（外部 CLI）で PMTiles に変換します。
 
-## Recent runtime/test updates (this session)
+このアプローチにより、プロセス内のピークメモリや一時スプールを抑え、外付けディスク上での長時間処理に耐えられるようになります。
 
-- Added `pipelines/mbtiles_writer.py` with WAL checkpointing and graceful
-  finalize.
-- Modified `pipelines/aggregate_pmtiles.py` to add timestamped phase logs and
-  ETA estimation on progress lines.
-- Updated `justfile` to default `TMPDIR` to the output directory and to call
-  `pmtiles convert` when available.
+## 主なコンポーネント
 
-## Future Enhancements (out of scope for current work)
+- `pipelines/aggregate_pmtiles.py` — マルチソース集約器。再投影、優先度順マージ（上位の NaN を下位で埋める）、Terrarium エンコード、MBTiles へのストリーミング書き出し、（オプションで）系譜(lineage) MBTiles の生成を行う。
+- `pipelines/mbtiles_writer.py` — WAL モードによるストリーミング書き出し。定期的に `PRAGMA wal_checkpoint(TRUNCATE)` を実行し、最終化時に `journal_mode=DELETE` に戻す実装。
+- `pipelines/mbtiles_to_pmtiles.py` — Python フォールバックで MBTiles を PMTiles に変換する小さなライブラリ（`pmtiles` CLI が無い環境向け）。
+- `pipelines/lineage.py` — 系譜（各ピクセルがどのソース由来か）を RGB にマップするプロトタイプ機能。
+- `scripts/` 以下 — `pipelines/` の薄い CLI ラッパー群（検査用スクリプト等）。
 
-- Aggregation with blending/weighting
-- Downsampling / overview generation
-- Macrotile-based parallelism for planet-scale processing
+## 運用上の重要点（推奨設定）
 
-## Notes for Operators
+- `TMPDIR` は出力ボリュームに設定する（例: `TMPDIR="$PWD/output"`）。システムボリュームの ENOSPC を避けるため必須推奨。
+- 環境: `GDAL_CACHEMAX=512`、`--warp-threads 1`、`--io-sleep-ms 1` を既定で使う。
+- 既定では詳細ログ（verbose）が有効。出力がうるさい場合は `--silent` を指定して抑制可能。互換のため `--verbose` も受け付ける。
+- `--emit-lineage` を指定すると、主 MBTiles 作成後に系譜 MBTiles を生成し、可能であれば自動で PMTiles に変換する（`--lineage-suffix` のデフォルトは `-lineage`）。
+- PMTiles 変換は優先して `pmtiles` CLI（`go-pmtiles`）を使用し、無ければ `pipelines/mbtiles_to_pmtiles.py` の Python 実装にフォールバックする。
 
-- Always set `TMPDIR` to the output volume (external SSD) to avoid system-
-  volume ENOSPC during long runs.
-- Example manual checkpoint (safe to run after an interrupted job):
+## 技術的方針
 
-```bash
-sqlite3 output/foo.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;"
-```
+- 再投影時は nodata を NaN で扱い、マージ段階では上位ソースの値を優先し、上位が NaN の箇所のみ下位で埋める。
+- 最終エンコードでは残存する NaN を 0 m（Terrarium の対応する RGB）として出力する。
+- 系譜はピクセル毎にソース優先度インデックス（int16、-1 = nodata）として計算し、必要に応じて可視化用 RGB タイルを出力する。
 
-## References
+## README と CLI の更新点（今回の変更）
 
-- [mapterhorn](https://github.com/mapterhorn/mapterhorn) - Original methodology
-- [Terrarium Encoding](https://github.com/tilezen/joerd/blob/master/docs/formats.md#terrarium)
-- [PMTiles](https://github.com/protomaps/PMTiles)
+- `--silent` を追加、既定で詳細ログ（verbose）を有効化。
+- `aggregate_pmtiles.py` が MBTiles 作成後に自動で `pmtiles convert` を試行するようになった（CLI 優先、Python フォールバックあり）。
+- `--emit-lineage` 実行時に系譜 MBTiles（basename + `-lineage`）を生成し、可能であれば系譜用 PMTiles も同時生成する。
+- テスト用の小規模リージョン例は `iwaki`（いわき市）を推奨テスト対象として README に追記。
 
-### pipelines/mbtiles_writer.py (new/modified)
+## 進捗ログと ETA について
 
-- Streaming MBTiles writer using SQLite with WAL mode and periodic
-  `PRAGMA wal_checkpoint(TRUNCATE)` to prevent `.wal` files from growing
-  unbounded during long writes. Finalizes by reverting to `journal_mode=DELETE`
-  so `.wal/.shm` are removed on close when safe.
+- 進捗ログは「書き出し済みタイル数 / チェック済み候補数 / 全候補に対する割合」を出力します。
+- ETA（残り時間）は候補数スキャン結果をもとに算出します。初期セットアップ（バケット構築など）時間が ETA を歪めないよう、セットアップ完了後にタイマを開始する改善を行いました。
+- さらに精度を上げるには、初期 N タイル（例: 最初の 100–500 タイル）での実測速度をブートストラップして推定に用いる方法（ブートストラップ平均や指数移動平均）を導入することが考えられます。
 
-### pipelines/mbtiles_to_pmtiles.py (new)
+## 推奨ワークフロー（例）
 
-- (optional) Python helper to convert MBTiles -> PMTiles using Python
-  `pmtiles.writer` for cases where the `pmtiles` CLI is not available.
-
-### pipelines/verify_mbtiles_yflip.py (new)
-
-- Utility to compare MBTiles tiles against the internal generator for a
-  bounding box to verify TMS⇄XYZ handling and byte-equality of tile payloads.
-
-### .gitignore
-
-
-### Test Coverage
-
-- ✅ Bounds generation (1 test file)
-- ✅ Terrarium encoding/decoding round-trip
-- ✅ PMTiles creation (18 MB test output)
-- ✅ MBTiles-first flow verified (MBTiles → PMTiles via `pmtiles convert`)
-- ✅ WAL checkpointing and finalize sequence tested (WAL not left large)
-- ✅ Zoom range 0-15 (1365 tiles)
-- ✅ All Just commands functional
-- ✅ Example script end-to-end
-
-### Security
-
-- ✅ CodeQL scan passed (0 alerts)
-- ✅ No secrets in code
-- ✅ Safe path handling
-- ✅ Input validation
-
-- Pipeline architecture documentation
-- Terrarium encoding/decoding formulas
-## Technical Implementation
-
-### Terrarium Encoding
-
-## Future Enhancements (Out of Scope)
-
-- Aggregation pipeline (multiple GeoTIFF → single PMTiles with blending)
-- Downsampling pipeline (overview generation)
-- Macrotile-based processing for large datasets
-- Bundle generation for planet-scale datasets
-
-elevation_rounded = round(elevation / factor) * factor
-offset = elevation_rounded + 32768
-G = offset % 256
-```
-
-## Notes for Operators
-
-- When running `just aggregate` for full production, ensure `TMPDIR` is
-  pointed at the output volume (external SSD) to avoid system-volume ENOSPC.
-- Monitor `output/*.mbtiles` `.wal/.shm` during long runs; the writer now
-  automatically checkpoints periodically but manual checkpoints are safe:
-  `sqlite3 output/foo.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;"`
-**Decoding:**
-```
-elevation = (R × 256 + G + B / 256) - 32768
-```
- 
-### Vertical Resolution by Zoom
-
-| Zoom | Resolution | Pixel Size |
-|------|-----------|-----------|
-| 0    | 2048 m    | 78.3 km   |
-| 10   | 2 m       | 76.4 m    |
-| 15   | 0.0625 m  | 2.39 m    |
-| 19   | 0.0039 m  | 0.149 m   |
-
-### Advantages Over Previous Implementation
-
-1. **Reduced external tool reliance**: Eliminated dependency on `rio-rgbify`; the
-  pipeline still uses the `go-pmtiles`/`pmtiles convert` CLI for final PMTiles
-  packing (preferred for performance). A pure-Python `pmtiles.writer` helper
-  is provided as an optional fallback when the CLI is not available.
-2. **Mapterhorn Compatible**: Full compatibility with mapterhorn ecosystem
-3. **Better Resolution**: Zoom-dependent vertical resolution reduces file size
-4. **Wider Range**: -32768m to +32767m (vs -10000m to +6553.5m in Mapbox)
-5. **Lossless**: WebP lossless encoding preserves all data
-6. **Simpler Pipeline**: 2 stages instead of 3 tools
-7. **Mostly Python**: The tiling, reprojection, and Terrarium encoding
-  processing is implemented in Python for maintainability. Final packing into
-  a PMTiles archive is usually performed by the external `pmtiles convert`
-  CLI; an optional Python writer helper exists for environments that prefer not
-  to install the CLI.
-
-8. **MBTiles-first/pmtiles convert**: Stream tiles into MBTiles (SQLite)
-  to avoid an in-memory/spool sort before packaging; offload final pack to
-  `go-pmtiles` which is optimized for producing PMTiles archives.
-
-9. **WAL checkpointing**: MBTiles writes use WAL mode with periodic
-  `wal_checkpoint(TRUNCATE)` to keep `.wal` small during long writes and a
-  final checkpoint + `journal_mode=DELETE` on finalize to remove WAL/SHM.
-
-## Testing
-
-### Test Coverage
-
-- ✅ Bounds generation (1 test file)
-- ✅ Terrarium encoding/decoding round-trip
-- ✅ PMTiles creation (18 MB test output)
-- ✅ MBTiles-first flow verified (MBTiles → PMTiles via `pmtiles convert`)
-- ✅ WAL checkpointing and finalize sequence tested (WAL not left large)
-- ✅ Zoom range 0-15 (1365 tiles)
-- ✅ All Just commands functional
-- ✅ Example script end-to-end
-
-### Security
-
-- ✅ CodeQL scan passed (0 alerts)
-- ✅ No secrets in code
-- ✅ Safe path handling
-- ✅ Input validation
-
-## Statistics
-
-- **Python files created**: 4 (22.7 KB total)
-- **Lines of code**: ~660 lines
-- **Documentation**: 2 README files (338 lines)
-- **Git commits**: 4 commits
-- **Test output**: 18 MB PMTiles from 1 MB GeoTIFF
-
-### Recent runtime/test updates (this session)
-
-- Added `pipelines/mbtiles_writer.py` with WAL checkpointing and graceful finalize
-- Added `pipelines/verify_mbtiles_yflip.py` for MBTiles vs generator verification
-- Modified `pipelines/aggregate_pmtiles.py` to include:
-  - timestamped phase and verbose logs (format: `YYYY-MM-DD HH:MM:SS`)
-  - ETA estimation on `Progress` lines (simple time-based projection from processed candidates)
-- Updated `justfile` to set `TMPDIR` to the output directory by default and to invoke `pmtiles convert` when available
-- Performed a Nagasaki-prefecture smoke test (dem1a subset):
-  - `nagasaki.mbtiles` / `nagasaki.pmtiles` produced
-  - 88,224 tiles written; `pmtiles convert` completed successfully (pack time ~3m)
-  - PMTiles size: ~585 MiB (varies by input and options)
-- Committed changes to the repository (MBTiles writer, aggregate ETA/logging, README updates)
-
-## Future Enhancements (Out of Scope)
-
-The following mapterhorn features could be added later:
-
-- Aggregation pipeline (multiple GeoTIFF → single PMTiles with blending)
-- Downsampling pipeline (overview generation)
-- Macrotile-based processing for large datasets
-- Bundle generation for planet-scale datasets
-
-## Notes for Operators
-
-- When running `just aggregate` for full production, ensure `TMPDIR` is
-  pointed at the output volume (external SSD) to avoid system-volume ENOSPC.
-- Monitor `output/*.mbtiles` `.wal/.shm` during long runs; the writer now
-  automatically checkpoints periodically but manual checkpoints are safe:
+1. 小規模テスト（推奨: `iwaki`）で挙動確認:
 
 ```bash
-sqlite3 output/foo.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;"
+mkdir -p output/iwaki
+TMPDIR="$PWD/output/iwaki" GDAL_CACHEMAX=512 \
+  just aggregate -o output/iwaki.pmtiles --bbox 140.55 36.80 141.15 37.40 --overwrite dem1a dem10b
 ```
 
-## References
+2. 問題なければ本番範囲で `just aggregate` を実行（出力は MBTiles → PMTiles）:
 
-- [mapterhorn](https://github.com/mapterhorn/mapterhorn) - Original methodology
-- [shin-freetown PR#4](https://github.com/optgeo/shin-freetown/pull/4) - Reference implementation
-- [Terrarium Encoding](https://github.com/tilezen/joerd/blob/master/docs/formats.md#terrarium)
-- [PMTiles Specification](https://github.com/protomaps/PMTiles)
+```bash
+TMPDIR="$PWD/output" GDAL_CACHEMAX=512 \
+  just aggregate -o output/fusi.pmtiles dem1a dem10b --max-zoom 16 --progress-interval 100 --overwrite
+```
+
+3. 系譜を生成する場合は `--emit-lineage` を追加。出力は `output/<name>-lineage.mbtiles` と `output/<name>-lineage.pmtiles`（可能なら自動生成）。
+
+## 今後の改善候補
+
+- ETA 精度向上のためのブートストラップ平均 (初期 N タイル) の導入
+- 系譜 MBTiles のメタデータ強化（`encoding: lineage` など）
+- パレットの外部設定や系譜のデータタイル（可逆バイナリ）出力オプション
+
+---
+
+更新履歴: セッション内で `--silent`/verbose デフォルト、自動 PMTiles 変換、`--emit-lineage` の PMTiles 自動変換、README の `iwaki` 推奨を追加・コミット済み。
