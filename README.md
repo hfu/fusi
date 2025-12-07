@@ -86,6 +86,12 @@ python3 -m pipelines.aggregate_pmtiles -o output/fusi.pmtiles bulk_all
 
   補足: MBTiles の書き込みでは SQLite の WAL モードを使用します。長時間・大規模書き込み時に WAL ファイルが肥大化しないよう、内部で定期的に `PRAGMA wal_checkpoint(TRUNCATE)` を実行して `.wal` を短く保ち、処理完了時に `PRAGMA journal_mode=DELETE` に戻して `.wal/.shm` を削除する設計になっています。
 
+#### 系譜（lineage）メタデータについて
+
+`just aggregate` は既定で `--emit-lineage` を有効にして、主 MBTiles/PMTiles と並行して系譜（provenance）MBTiles/PMTiles を生成します（ファイル名サフィックスは `-lineage`）。系譜 MBTiles にはメタデータ `encoding: lineage` が付与されます（`pipelines/mbtiles_writer.py` の `update_metadata()` により書き込み）。視覚化や検査の際に、通常の Terrarium タイルと系譜タイルを区別するために参照できます。
+
+系譜タイルはピクセル毎に「どの優先度ソースが値を供給したか」を RGB で表します（nodata は -1 を表す専用色）。主タイル生成後の後処理として計算・書き込みするため、I/O が増えます。不要であれば `--no-emit-lineage` を指定してください。
+
 ### 長崎県スモークテスト結果
 
 2025-11-26 に長崎県域（概算 bbox: `128.3,32.4,131.6,33.8`）で `--max-zoom 16` のスモークテストを実施しました。主要ポイントは以下の通りです。
@@ -190,7 +196,7 @@ just convert source-store/bulk_all/sample.tif output/sample.pmtiles
 - `--max-zoom` を省略すると、ソースの Ground Sample Distance (GSD) からズームを自動推定します。
 - 実行ログに「Auto-selected max zoom …」が表示されます。
 
--## 実務で得た Tips
+## 実務で得た Tips / トラブルシューティング
 
 - **テストから本番へ**: 小さなサブセットで `just aggregate` を試し、ズーム自動推定や nodata=0 m の挙動を確認してから全量処理すると安全です。
   - 推奨の小規模テスト地域: `iwaki`（今後のテスト例では `iwaki` を使用します）。
@@ -199,6 +205,23 @@ just convert source-store/bulk_all/sample.tif output/sample.pmtiles
 - **GDAL キャッシュ**: 既定 `GDAL_CACHEMAX=512`。マシンに余裕があれば上げられますが、I/O 飽和時は増やし過ぎないでください。
 - **Mapzen (Mapterhorn) との比較**: Mapzen の Mapterhorn タイルはズーム 0–15 が公式レンジ（[ドキュメント](https://raw.githubusercontent.com/tilezen/joerd/master/docs/index.md)）です。本ツールはズーム 16 まで自動出力できるので、地形の細部を 1 段深く表現できます。
 - **データサイズ**: Lossless WebP により圧縮しますが、ズーム範囲によっては数十 GB になる場合があります。十分なディスク容量を確保してください。
+
+### よくあるエラーと対処
+
+- **exit 137 / Killed（メモリ不足の可能性）**
+  - 対策: `GDAL_CACHEMAX=128–256` に下げる、`--warp-threads 1` を指定、`--io-sleep-ms 5–10` に増やす、BBOX を絞る。
+  - `TMPDIR` を必ず出力側（外付けSSD等）に設定。環境変数の誤記に注意。
+
+- **MapLibre の “dem dimension mismatch”**
+  - 原因: `raster-dem` の期待サイズと提供タイルサイズが異なる場合に発生。Terrarium は 512×512 前提。ソース設定の `tileSize` と `encoding` を確認。
+  - 検証: MBTiles からサンプルタイルを取り出し、WebP をデコードして画像サイズが 512×512 であることを確認。
+
+- **WAL ファイルの肥大化**
+  - 集約中は WAL モードを使用。完了時に `journal_mode=DELETE` に戻す。中断後は手動でチェックポイント：
+  
+  ```bash
+  sqlite3 output/*.mbtiles "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;"
+  ```
 
 ## コマンド一覧（`just --list` と同等）
 
