@@ -1,6 +1,6 @@
 # fusi
 
-`fusi` は国土地理院の標高 GeoTIFF を Terrarium 形式のタイルに変換するツールチェーンです。mapterhorn が示した手法をベースに、Web Mercator（EPSG:3857）への自動再投影やズーム別の垂直解像度管理を備えています。内部的には Lossless WebP のタイルを MBTiles に書き出し、`go-pmtiles` の `pmtiles convert` コマンドで PMTiles に変換します。
+`fusi` は国土地理院の標高 GeoTIFF を Terrarium 形式のタイルに変換するツールチェーンです。mapterhorn が示した手法をベースに、Web Mercator（EPSG:3857）への自動再投影やズーム別の垂直解像度管理を備えています。内部的には Lossless WebP のタイルを MBTiles に書き出し、`go-pmtiles` の `pmtiles convert` コマンドで PMTiles に変換します。`just aggregate` は既定で系譜（lineage）MBTiles/PMTiles も同時生成します（suffix: `-lineage`）。
 
 ## 主な特徴
 
@@ -68,7 +68,7 @@ just bounds bulk_all
 
 標準出力に処理件数が表示され、`source-store/bulk_all/bounds.csv` が生成されます。
 
-### 2. MBTiles/PMTiles を生成（安全デフォルトでI/O安定化）
+### 2. MBTiles/PMTiles を生成（安全デフォルトでI/O安定化、lineage も既定生成）
 
 ```bash
 just aggregate bulk_all
@@ -82,7 +82,7 @@ just aggregate bulk_all
 python3 -m pipelines.aggregate_pmtiles -o output/fusi.pmtiles bulk_all
 ```
 
-注意: 既存の MBTiles を上書きしたい場合は `--overwrite` を付けてください（デフォルトでは上書きを拒否します）。
+注意: 既存の MBTiles を上書きしたい場合は `--overwrite` を付けてください（デフォルトでは上書きを拒否します）。詳細ログは既定で有効です（`--silent` で抑制）。
 
   補足: MBTiles の書き込みでは SQLite の WAL モードを使用します。長時間・大規模書き込み時に WAL ファイルが肥大化しないよう、内部で定期的に `PRAGMA wal_checkpoint(TRUNCATE)` を実行して `.wal` を短く保ち、処理完了時に `PRAGMA journal_mode=DELETE` に戻して `.wal/.shm` を削除する設計になっています。
 
