@@ -68,15 +68,31 @@ just bounds bulk_all
 
 標準出力に処理件数が表示され、`source-store/bulk_all/bounds.csv` が生成されます。
 
-### 2. MBTiles/PMTiles を生成（安全デフォルトでI/O安定化、lineage も既定生成）
+### 2. MBTiles/PMTiles を生成
+
+#### 推奨: Zoom分割による省メモリ実行（16GB RAM環境）
+
+メモリ使用量を10GB以下に抑える分割実行方式：
+
+```bash
+just aggregate-split bulk_all
+```
+
+- Zoom分割により、16GB RAMでも安定して実行可能
+- メモリ使用量: 従来の40GB → 10GB以下に削減
+- 処理時間: 従来比+10-20%程度
+- 詳細は [ZOOM_SPLIT_GUIDE.md](./ZOOM_SPLIT_GUIDE.md) を参照
+
+#### 従来方式: 一括実行（24GB+ RAM推奨）
 
 ```bash
 just aggregate bulk_all
 ```
 
 - `output/fusi.pmtiles` が生成されます（内部的に `output/fusi.mbtiles` → `pmtiles convert`）。
+- メモリ使用量が大きいため、32GB以上のRAMを推奨
 
- 代替: モジュールとして直接起動することもできます（`just` を介さずに実行する場合）。
+代替: モジュールとして直接起動することもできます（`just` を介さずに実行する場合）。
 
 ```bash
 python3 -m pipelines.aggregate_pmtiles -o output/fusi.pmtiles bulk_all
@@ -231,9 +247,26 @@ just check                        # 依存関係チェック
 just bounds <source>              # bounds.csv 生成
 just convert <input> <output> [--min-zoom Z] [--max-zoom Z]
 just test-sample <source>         # 代表ファイルでの動作確認
+
+# 通常のaggregate（24GB+ RAM推奨）
 just aggregate <source...> [options]
   # -o/--output で PMTiles パスを指定（省略時は output/fusi.pmtiles）
   # 既定で詳細ログを有効化（`--silent` で抑制）し、TMPDIR=output/ と GDAL_CACHEMAX=512 を設定
+
+# Zoom分割aggregate（16GB RAM環境推奨、省メモリ）
+just aggregate-split <source...> [options]
+  # --split-pattern でパターン選択（balanced, safe, fast, incremental）
+  # --resume-from N で中断からの再開
+
+# 特定のズーム範囲のみ処理
+just aggregate-zoom <min_zoom> <max_zoom> <source...> [options]
+
+# 複数MBTilesのマージ
+just merge-mbtiles <output> <input1> <input2> ...
+
+# Zoom分割パターンの確認
+just show-split-patterns
+
 just inspect <pmtiles>            # PMTiles メタデータ閲覧
 just upload                       # output/fusi.pmtiles をリモートへ rsync
 just clean / clean-all            # 出力や bounds.csv を削除

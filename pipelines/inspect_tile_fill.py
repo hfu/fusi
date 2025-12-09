@@ -14,7 +14,10 @@ import argparse
 from typing import Optional
 
 import numpy as np
-import mercantile
+try:
+    import mercantile
+except Exception:  # pragma: no cover - optional
+    mercantile = None
 
 from .aggregate_pmtiles import load_bounds, read_tile_from_source, merge_tile_candidates
 from . import imagecodecs

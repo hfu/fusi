@@ -9,7 +9,10 @@ Prints per-source availability and whether lower-priority source filled nodata f
 
 from __future__ import annotations
 
-import sqlite3
+try:
+    import mercantile
+except Exception:  # pragma: no cover - optional
+    mercantile = None
 import sys
 from io import BytesIO
 from pathlib import Path

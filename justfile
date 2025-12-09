@@ -134,7 +134,48 @@ check:
 inspect pmtiles_file:
     pipenv run python pipelines/inspect_pmtiles.py "{{pmtiles_file}}"
 
-# 10. Upload: Sync PMTiles to remote host
+# 10. Aggregate with zoom splitting (memory-optimized)
+aggregate-split *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{output_dir}}"
+    export TMPDIR="$(cd "{{output_dir}}" && pwd)"
+    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+    
+    pipenv run python -u -m pipelines.split_aggregate \
+        --verbose \
+        "$@"
+
+# 11. Aggregate specific zoom range only
+aggregate-zoom min_zoom max_zoom *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{output_dir}}"
+    export TMPDIR="$(cd "{{output_dir}}" && pwd)"
+    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+    
+    pipenv run python -u -m pipelines.aggregate_by_zoom \
+        --min-zoom {{min_zoom}} \
+        --max-zoom {{max_zoom}} \
+        --verbose \
+        "$@"
+
+# 12. Merge multiple MBTiles files
+merge-mbtiles output_path *input_paths:
+    pipenv run python pipelines/merge_mbtiles.py \
+        --output "{{output_path}}" \
+        {{input_paths}}
+
+# 13. Show zoom split patterns
+show-split-patterns:
+    @echo "Available split patterns:"
+    @echo ""
+    @pipenv run python pipelines/zoom_split_config.py --pattern balanced
+    @echo ""
+    @echo "Other patterns: safe, fast, incremental, single"
+    @echo "Use: pipenv run python pipelines/zoom_split_config.py --pattern <name>"
+
+# 14. Upload: Sync PMTiles to remote host
 upload:
     #!/usr/bin/env bash
     set -euo pipefail

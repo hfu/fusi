@@ -11,7 +11,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
-import mercantile
+try:
+    import mercantile
+except Exception:  # pragma: no cover - optional
+    mercantile = None
 import numpy as np
 
 from .aggregate_pmtiles import (

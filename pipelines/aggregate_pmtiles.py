@@ -31,7 +31,10 @@ from typing import Dict, Generator, Iterable, List, Optional, Sequence, Tuple, U
 import time
 from io import BytesIO
 
-import mercantile
+try:
+    import mercantile
+except Exception:  # pragma: no cover - optional
+    mercantile = None
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling

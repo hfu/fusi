@@ -12,7 +12,10 @@ import sqlite3
 from pathlib import Path
 from typing import Dict, Tuple
 
-import mercantile
+try:
+    import mercantile  # optional
+except Exception:  # pragma: no cover - optional
+    mercantile = None
 
 from aggregate_pmtiles import load_bounds, generate_aggregated_tiles
 

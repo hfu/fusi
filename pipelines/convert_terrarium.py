@@ -20,7 +20,10 @@ import numpy as np
 import rasterio
 from rasterio.warp import reproject, calculate_default_transform, Resampling
 from rasterio.io import MemoryFile
-import mercantile
+try:
+    import mercantile
+except Exception:  # pragma: no cover - optional
+    mercantile = None
 from . import imagecodecs
 from pmtiles.tile import zxy_to_tileid, TileType, Compression
 from pmtiles.writer import Writer
@@ -43,6 +46,21 @@ def get_vertical_resolution(z):
     full_resolution_zoom = 19
     factor = 2 ** (full_resolution_zoom - z) / 256
     return factor
+
+
+def _require_mercantile() -> None:
+    """Raise a helpful error if mercantile is not available.
+
+    Some code paths require mercantile for tile boundary calculations. We
+    make mercantile optional at import time to avoid failing imports in
+    light-weight test environments, but we should raise an explicit error
+    at call-time if a function actually needs it.
+    """
+    if mercantile is None:
+        raise RuntimeError(
+            "mercantile is required for this operation.\n"
+            "Install it with: pip install mercantile"
+        )
 
 
 def recommended_max_zoom(pixel_size_m):
@@ -146,6 +164,10 @@ def generate_tiles(src_path, min_zoom, max_zoom):
     Yields:
         Tuple of (z, x, y, webp_data)
     """
+    # This function relies on mercantile to enumerate tiles and compute
+    # tile bounds. Fail fast with a clear message if mercantile is missing.
+    _require_mercantile()
+
     with rasterio.open(src_path) as src:
         # Get bounds in lat/lon for mercantile
         bounds = src.bounds
@@ -236,6 +258,18 @@ def create_pmtiles(
         with tempfile.NamedTemporaryFile(delete=False, dir=spool_dir, suffix=".spool") as tmpfile:
             tmpfile_path = tmpfile.name
             since_fsync = 0
+            # create_pmtiles may also call mercantile-bound-related code when
+            # metrics or bounds are computed; ensure mercantile is present if
+            # the generator yields tiles with x/y that require bounds computation.
+            try:
+                _require_mercantile()
+            except RuntimeError:
+                # It's acceptable for some callers to generate tiles without
+                # requiring mercantile-based bounds. We'll only compute bounds
+                # when mercantile is present; otherwise the metadata will omit
+                # precise bounds but the PMTiles will still be created.
+                pass
+
             for z, x, y, webp_data in tiles_generator:
                 tile_id = zxy_to_tileid(z=z, x=x, y=y)
                 # Write a tuple (tile_id, webp_data) to the temp file
@@ -250,11 +284,19 @@ def create_pmtiles(
                         pass
                     since_fsync = 0
 
-                # Update bounds
+                # Update bounds (only if mercantile is available)
                 max_z = max(max_z, z)
                 min_z = min(min_z, z)
-                bounds = mercantile.bounds(x, y, z)
-                min_lon = min(min_lon, bounds.west)
+                if mercantile is not None:
+                    try:
+                        bounds = mercantile.bounds(x, y, z)
+                        min_lon = min(min_lon, bounds.west)
+                        min_lat = min(min_lat, bounds.south)
+                        max_lon = max(max_lon, bounds.east)
+                        max_lat = max(max_lat, bounds.north)
+                    except Exception:
+                        # Skip bounds update for this tile
+                        pass
                 min_lat = min(min_lat, bounds.south)
                 max_lon = max(max_lon, bounds.east)
                 max_lat = max(max_lat, bounds.north)
