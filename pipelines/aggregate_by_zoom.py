@@ -18,6 +18,7 @@ from .aggregate_pmtiles import (
     SourceRecord,
     MAX_SUPPORTED_ZOOM,
 )
+from .uss_monitor import USSMonitor
 
 
 def aggregate_zoom_range(
@@ -161,6 +162,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of threads for raster warping",
     )
     parser.add_argument(
+        "--max-memory-mb",
+        type=int,
+        default=None,
+        help="Optional soft memory limit for the worker process in MiB (best-effort).",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite existing MBTiles output if present",
@@ -197,6 +204,25 @@ def main() -> None:
     if not args.sources:
         raise SystemExit("At least one source name is required")
 
+    # If requested, enforce a soft memory limit for this worker process before heavy work.
+    if getattr(args, "max_memory_mb", None):
+        try:
+            import resource
+
+            limit_bytes = int(args.max_memory_mb) * 1024 * 1024
+            # Try RLIMIT_AS first (address space). If not available, try RLIMIT_RSS.
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+            except Exception:
+                try:
+                    resource.setrlimit(resource.RLIMIT_RSS, (limit_bytes, limit_bytes))
+                except Exception:
+                    # best-effort: cannot set limit on this platform
+                    pass
+        except Exception:
+            # ignore failures to set limits; proceed without enforcement
+            pass
+
     # ソースレコードを構築
     records = build_records_from_sources(args.sources)
 
@@ -208,19 +234,35 @@ def main() -> None:
 
     # aggregate実行
     try:
-        output_path = aggregate_zoom_range(
-            records=records,
-            output_mbtiles=args.output,
-            min_zoom=args.min_zoom,
-            max_zoom=args.max_zoom,
-            bbox_wgs84=bbox,
-            progress_interval=args.progress_interval,
-            verbose=args.verbose,
-            io_sleep_ms=args.io_sleep_ms,
-            warp_threads=args.warp_threads,
-            overwrite=args.overwrite,
-        )
-        print(f"Success! Output: {output_path}")
+        # Start USS sampler writing to a CSV next to the output MBTiles
+        try:
+            out_path = Path(args.output)
+            uss_csv = out_path.with_suffix(".uss.csv")
+            uss_monitor = USSMonitor(interval=0.5, output_csv=str(uss_csv))
+            uss_monitor.start()
+        except Exception:
+            uss_monitor = None
+
+        try:
+            output_path = aggregate_zoom_range(
+                records=records,
+                output_mbtiles=args.output,
+                min_zoom=args.min_zoom,
+                max_zoom=args.max_zoom,
+                bbox_wgs84=bbox,
+                progress_interval=args.progress_interval,
+                verbose=args.verbose,
+                io_sleep_ms=args.io_sleep_ms,
+                warp_threads=args.warp_threads,
+                overwrite=args.overwrite,
+            )
+            print(f"Success! Output: {output_path}")
+        finally:
+            try:
+                if uss_monitor is not None:
+                    uss_monitor.stop()
+            except Exception:
+                pass
     except Exception as e:
         print(f"Error: {e}")
         raise SystemExit(1)

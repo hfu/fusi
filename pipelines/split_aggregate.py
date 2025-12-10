@@ -44,6 +44,7 @@ def run_split_aggregate(
     overwrite: bool = False,
     keep_intermediates: bool = False,
     spawn_per_group: bool = True,
+    max_memory_mb: Optional[int] = None,
 ) -> None:
     """Zoom分割を使ったaggregate処理を実行する。
 
@@ -188,11 +189,30 @@ def run_split_aggregate(
                 # original `sources` list (e.g. dem1a, dem5a) which the
                 # aggregate_by_zoom CLI expects.
                 cmd.extend(list(sources))
+                # Pass optional memory limit to worker subprocess
+                if max_memory_mb is not None:
+                    cmd.extend(["--max-memory-mb", str(int(max_memory_mb))])
 
                 if verbose:
                     print(f"Spawning subprocess for group {i+1}: {' '.join(cmd)}")
                 subprocess.check_call(cmd)
             else:
+                # If running in-process, enforce memory limits (best-effort)
+                if max_memory_mb is not None:
+                    try:
+                        import resource
+
+                        limit_bytes = int(max_memory_mb) * 1024 * 1024
+                        try:
+                            resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+                        except Exception:
+                            try:
+                                resource.setrlimit(resource.RLIMIT_RSS, (limit_bytes, limit_bytes))
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
                 aggregate_zoom_range(
                     records=records,
                     output_mbtiles=intermediate_path,
@@ -445,6 +465,12 @@ def parse_args() -> argparse.Namespace:
         help="Disable spawning per-group (run in-process)",
     )
     parser.add_argument(
+        "--max-memory-mb",
+        type=int,
+        default=None,
+        help="Optional soft memory limit for worker subprocesses in MiB (best-effort).",
+    )
+    parser.add_argument(
         "sources",
         nargs="+",
         help="Source names under source-store/",
@@ -484,6 +510,7 @@ def main() -> None:
             overwrite=args.overwrite,
             keep_intermediates=args.keep_intermediates,
             spawn_per_group=(not args.no_spawn_per_group) and bool(args.spawn_per_group),
+            max_memory_mb=args.max_memory_mb,
         )
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
