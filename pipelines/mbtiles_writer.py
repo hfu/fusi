@@ -15,6 +15,10 @@ import math
 import sqlite3
 from pathlib import Path
 from typing import Generator, Iterable, Tuple
+import os
+import time
+from datetime import datetime
+import json
 
 import mercantile
 
@@ -31,7 +35,17 @@ class MBTilesWriter:
         # Let SQLite perform periodic auto-checkpoints; we also perform
         # explicit checkpoints every N inserted tiles to keep .wal bounded.
         try:
-            self.conn.execute("PRAGMA wal_autocheckpoint=1000;")
+            # Allow environment override for autocheckpoint to more aggressively
+            # truncate WAL on heavy-write systems.
+            env_autocp = os.environ.get("FUSI_MB_WAL_AUTOCHECKPOINT")
+            if env_autocp is not None:
+                try:
+                    v = int(env_autocp)
+                except Exception:
+                    v = 1000
+            else:
+                v = 1000
+            self.conn.execute(f"PRAGMA wal_autocheckpoint={v};")
         except Exception:
             pass
         self._ensure_schema()
@@ -39,7 +53,23 @@ class MBTilesWriter:
         # Insert bookkeeping to enable periodic WAL checkpointing
         self._insert_count = 0
         # Default checkpoint interval (number of tiles). Tuneable.
-        self._checkpoint_interval = 10000
+        # Allow tuning via environment variable to make checkpointing more frequent
+        try:
+            self._checkpoint_interval = int(os.environ.get("FUSI_MB_CHECKPOINT_INTERVAL", "10000"))
+        except Exception:
+            self._checkpoint_interval = 10000
+
+        # Sleep duration after commits (seconds); used to throttle disk I/O.
+        try:
+            self._commit_sleep_sec = float(os.environ.get("FUSI_MB_COMMIT_SLEEP_SEC", "0"))
+        except Exception:
+            self._commit_sleep_sec = 0.0
+
+        # Optional small sleep after each batch to yield IO and reduce write bursts
+        try:
+            self._batch_sleep_sec = float(os.environ.get("FUSI_MB_BATCH_SLEEP_SEC", "0"))
+        except Exception:
+            self._batch_sleep_sec = 0.0
 
         # Track basic bounds and zoom range while writing tiles
         self._min_z = math.inf
@@ -50,6 +80,12 @@ class MBTilesWriter:
         self._max_lat = -math.inf
         # Optional extra metadata entries to write at finalize
         self._extra_metadata = extra_metadata or {}
+
+        # Writer log path: append `.writer.log` to the MBTiles filename
+        try:
+            self._writer_log_path = self.path.with_name(self.path.name + ".writer.log")
+        except Exception:
+            self._writer_log_path = None
 
     def _ensure_schema(self) -> None:
         cur = self.conn.cursor()
@@ -73,6 +109,33 @@ class MBTilesWriter:
             """
         )
         self.conn.commit()
+
+    def _log_writer_event(self, event_type: str, info: dict | None = None) -> None:
+        """Append a JSONL event describing writer actions (commit/checkpoint).
+
+        The log is written to `<mbtiles>.writer.log` next to the MBTiles file.
+        """
+        if not self._writer_log_path:
+            return
+        try:
+            wal_path = str(self.path) + "-wal"
+            try:
+                wal_bytes = os.path.getsize(wal_path)
+            except Exception:
+                wal_bytes = 0
+            event = {
+                "event": event_type,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "wal_bytes": wal_bytes,
+            }
+            if info:
+                for k, v in info.items():
+                    event[str(k)] = v
+            with open(self._writer_log_path, "a") as lf:
+                lf.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except Exception:
+            # Never raise from logging
+            pass
 
     def _update_bounds(self, z: int, x: int, y: int) -> None:
         self._min_z = min(self._min_z, z)
@@ -102,15 +165,44 @@ class MBTilesWriter:
             self._insert_count += 1
 
             if len(batch) >= batch_size:
+                n_batch = len(batch)
                 cur.executemany(
                     "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?)",
                     batch,
                 )
                 self.conn.commit()
+                # Log commit event
+                try:
+                    self._log_writer_event("commit", {"batch_committed": n_batch, "insert_count": self._insert_count})
+                except Exception:
+                    pass
+                # Throttle after commit if requested to reduce write bursts
+                if getattr(self, "_commit_sleep_sec", 0):
+                    try:
+                        time.sleep(self._commit_sleep_sec)
+                    except Exception:
+                        pass
+                # Small pause after each batch if requested
+                if getattr(self, "_batch_sleep_sec", 0):
+                    try:
+                        time.sleep(self._batch_sleep_sec)
+                    except Exception:
+                        pass
                 if self._insert_count and (self._insert_count % self._checkpoint_interval) == 0:
                     try:
                         self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                         self.conn.commit()
+                        # Log checkpoint event
+                        try:
+                            self._log_writer_event("checkpoint", {"insert_count": self._insert_count})
+                        except Exception:
+                            pass
+                        # Sleep briefly after checkpoint to let OS flush
+                        if getattr(self, "_commit_sleep_sec", 0):
+                            try:
+                                time.sleep(self._commit_sleep_sec)
+                            except Exception:
+                                pass
                     except Exception:
                         # Non-fatal; we'll try again at finalize
                         pass
@@ -122,10 +214,29 @@ class MBTilesWriter:
                 batch,
             )
             self.conn.commit()
+            # Log final batch commit
+            try:
+                self._log_writer_event("commit", {"batch_committed": len(batch), "insert_count": self._insert_count})
+            except Exception:
+                pass
+            if getattr(self, "_commit_sleep_sec", 0):
+                try:
+                    time.sleep(self._commit_sleep_sec)
+                except Exception:
+                    pass
             if self._insert_count and (self._insert_count % self._checkpoint_interval) == 0:
                 try:
                     self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                     self.conn.commit()
+                    try:
+                        self._log_writer_event("checkpoint", {"insert_count": self._insert_count})
+                    except Exception:
+                        pass
+                    if getattr(self, "_commit_sleep_sec", 0):
+                        try:
+                            time.sleep(self._commit_sleep_sec)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -175,6 +286,10 @@ class MBTilesWriter:
             self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
             self.conn.execute("PRAGMA journal_mode=DELETE;")
             self.conn.commit()
+            try:
+                self._log_writer_event("finalize", {"insert_count": self._insert_count})
+            except Exception:
+                pass
         finally:
             try:
                 self.conn.close()
