@@ -103,7 +103,7 @@ aggregate *args:
     pipenv run python -u -m pipelines.aggregate_pmtiles \
         --verbose \
         --emit-lineage \
-        -- "$@"
+        "$@"
 
     # MBTiles → PMTiles 変換
     if command -v pmtiles >/dev/null 2>&1; then
@@ -146,7 +146,7 @@ aggregate-split *args:
     
     pipenv run python -u -m pipelines.split_aggregate \
         --verbose \
-        -- "$@"
+        "$@"
 
 # 11. Aggregate specific zoom range only
 aggregate-zoom min_zoom max_zoom *args:
@@ -162,7 +162,7 @@ aggregate-zoom min_zoom max_zoom *args:
         --min-zoom {{min_zoom}} \
         --max-zoom {{max_zoom}} \
         --verbose \
-        -- "$@"
+        "$@"
 
 # 12. Merge multiple MBTiles files
 merge-mbtiles output_path *input_paths:
