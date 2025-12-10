@@ -9,6 +9,7 @@ set -euo pipefail
 WORKDIR="$(pwd)"
 TMPDIR_OVERRIDE=""
 CMD=""
+FOLLOW=0
 
 usage(){
   cat <<USAGE
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
       break
       ;;
     --help) usage; exit 0;;
+    --follow) FOLLOW=1; shift ;;
     *) echo "Unknown arg: $1"; usage; exit 2;;
   esac
 done
@@ -71,5 +73,15 @@ echo "CMD: $CMD" >> "$LOGFILE"
 
 # Run the command in a nohup backgrounded shell so it survives disconnects.
 nohup bash -lc "cd '$WORKDIR' && $CMD" >> "$LOGFILE" 2>&1 &
-echo "PID:$!" >> "$LOGFILE"
+PID="$!"
+echo "PID:$PID" >> "$LOGFILE"
 echo "Launched. Log: $LOGFILE"
+
+# If requested, follow the logfile to stdout so the caller sees realtime output.
+if [ "$FOLLOW" -eq 1 ]; then
+  echo "Tailing log (press Ctrl-C to stop following)" | tee -a "$LOGFILE"
+  # Use -F to follow even if the logfile is rotated/recreated.
+  tail -n +1 -F "$LOGFILE"
+else
+  echo "To follow logs: tail -f $LOGFILE"
+fi
