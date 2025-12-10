@@ -5,6 +5,7 @@ set -euo pipefail
 
 WORKDIR=$(pwd)
 CD=
+TMPDIR_OVERRIDE=""
 if [ -d "/Volumes/Migrate-2025-04/github/fusi" ]; then
   CD="/Volumes/Migrate-2025-04/github/fusi"
 elif [ -d "$WORKDIR" ]; then
@@ -12,7 +13,19 @@ elif [ -d "$WORKDIR" ]; then
 fi
 cd "$CD"
 
-export TMPDIR="$CD/output"
+# Allow an optional --tmpdir /path override before other args.
+if [ "$#" -ge 2 ] && [ "$1" = "--tmpdir" ]; then
+  TMPDIR_OVERRIDE="$2"
+  shift 2
+fi
+
+if [ -n "$TMPDIR_OVERRIDE" ]; then
+  export TMPDIR="$TMPDIR_OVERRIDE"
+  echo "Using TMPDIR override: $TMPDIR"
+else
+  export TMPDIR="$CD/output"
+  echo "Using TMPDIR default: $TMPDIR"
+fi
 export GDAL_CACHEMAX=64
 export OMP_NUM_THREADS=1
 export GDAL_NUM_THREADS=1

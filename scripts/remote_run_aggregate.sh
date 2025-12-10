@@ -11,6 +11,7 @@ REMOTE=""
 SOURCE=""
 OUTPUT="output/remote_test.pmtiles"
 KEEP_INTERMEDIATES=0
+TMPDIR_OVERRIDE=""
 
 usage(){
   cat <<'USAGE'
@@ -29,6 +30,7 @@ LOG_PATH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --remote) REMOTE="$2"; shift 2;;
+    --tmpdir) TMPDIR_OVERRIDE="$2"; shift 2;;
     --source) SOURCE="$2"; shift 2;;
     --output) OUTPUT="$2"; shift 2;;
     --keep-intermediates) KEEP_INTERMEDIATES=1; shift;;
@@ -53,9 +55,17 @@ if [[ -z "$SOURCE" ]]; then
 fi
 
 # Commands to run on remote. Adjust TMPDIR to use remote disk with space.
-REMOTE_BASE_CMD=$(cat <<- 'EOS'
+REMOTE_BASE_CMD=$(cat <<-'EOS'
 set -euo pipefail
 cd /Users/hfu/github/fusi
+# If TMPDIR_OVERRIDE is provided in the remote environment, use it; otherwise
+# default TMPDIR to the repo output directory on the remote host.
+if [ -n "${TMPDIR_OVERRIDE:-}" ]; then
+  export TMPDIR="${TMPDIR_OVERRIDE}"
+else
+  mkdir -p output || true
+  export TMPDIR="$(pwd)/output"
+fi
 # activate pipenv if present, otherwise rely on system python
 if [ -f Pipfile ]; then
   CMD_PREFIX="pipenv run"
@@ -117,6 +127,11 @@ if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
   exit 0
 fi
 
-ssh "$REMOTE" bash -lc "$REMOTE_CMD"
+if [ -n "$TMPDIR_OVERRIDE" ]; then
+  # Pass TMPDIR_OVERRIDE into the remote environment so REMOTE_BASE_CMD picks it up
+  ssh "$REMOTE" TMPDIR_OVERRIDE="$TMPDIR_OVERRIDE" bash -lc "$REMOTE_CMD"
+else
+  ssh "$REMOTE" bash -lc "$REMOTE_CMD"
+fi
 
 echo "Remote run finished. Check remote output path or transfer results back as needed."

@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import threading
+import time
+import signal
+import os
 from typing import List, Optional, Sequence, Tuple, Union
+import os
 
 from .aggregate_pmtiles import (
     build_records_from_sources,
@@ -162,6 +167,30 @@ def parse_args() -> argparse.Namespace:
         help="Number of threads for raster warping",
     )
     parser.add_argument(
+        "--tmpdir",
+        type=Path,
+        default=None,
+        help="Temporary directory for this worker (overrides TMPDIR env)",
+    )
+    parser.add_argument(
+        "--watchdog-memory-mb",
+        type=int,
+        default=None,
+        help="If set, watchdog will terminate the process when RSS exceeds this MiB (best-effort, uses psutil if available)",
+    )
+    parser.add_argument(
+        "--watchdog-time-seconds",
+        type=int,
+        default=None,
+        help="If set, watchdog will terminate the process after this many seconds of runtime",
+    )
+    parser.add_argument(
+        "--watchdog-interval-seconds",
+        type=float,
+        default=0.5,
+        help="Watchdog check interval in seconds",
+    )
+    parser.add_argument(
         "--max-memory-mb",
         type=int,
         default=None,
@@ -204,6 +233,14 @@ def main() -> None:
     if not args.sources:
         raise SystemExit("At least one source name is required")
 
+    # If requested, set TMPDIR for this process so libraries write temp files
+    # to the requested location (useful to redirect temp files to external disk).
+    if getattr(args, "tmpdir", None):
+        try:
+            os.environ["TMPDIR"] = str(args.tmpdir)
+        except Exception:
+            pass
+
     # If requested, enforce a soft memory limit for this worker process before heavy work.
     if getattr(args, "max_memory_mb", None):
         try:
@@ -219,6 +256,57 @@ def main() -> None:
                 except Exception:
                     # best-effort: cannot set limit on this platform
                     pass
+
+                # If the user requested a watchdog, start a background thread to monitor
+                # memory usage and runtime. Prefer psutil for accurate RSS checks; if not
+                # available, the watchdog will only enforce the runtime limit.
+                def _start_watchdog(mem_limit_mib: Optional[int], time_limit_s: Optional[int], interval_s: float):
+                    if mem_limit_mib is None and time_limit_s is None:
+                        return None
+
+                    try:
+                        import psutil
+                    except Exception:
+                        psutil = None
+
+                    pid = os.getpid()
+
+                    def _watcher():
+                        start_ts = time.time()
+                        proc = psutil.Process(pid) if psutil is not None else None
+                        mem_limit_bytes = int(mem_limit_mib) * 1024 * 1024 if mem_limit_mib is not None else None
+                        while True:
+                            try:
+                                # Time-based termination
+                                if time_limit_s is not None and (time.time() - start_ts) > float(time_limit_s):
+                                    print(f"Watchdog: time limit exceeded ({time_limit_s}s) — terminating")
+                                    os.kill(pid, signal.SIGTERM)
+                                    return
+
+                                # Memory-based termination (requires psutil)
+                                if proc is not None and mem_limit_bytes is not None:
+                                    try:
+                                        rss = proc.memory_info().rss
+                                    except Exception:
+                                        rss = None
+                                    if rss is not None and rss > mem_limit_bytes:
+                                        print(f"Watchdog: RSS {rss} > limit {mem_limit_bytes} — terminating")
+                                        os.kill(pid, signal.SIGTERM)
+                                        return
+                            except Exception:
+                                # Swallow unexpected errors in the watchdog loop
+                                pass
+                            time.sleep(interval_s)
+
+                    t = threading.Thread(target=_watcher, daemon=True, name="watchdog-thread")
+                    t.start()
+                    return t
+
+                watchdog_thread = _start_watchdog(
+                    getattr(args, "watchdog_memory_mb", None),
+                    getattr(args, "watchdog_time_seconds", None),
+                    float(getattr(args, "watchdog_interval_seconds", 0.5)),
+                )
         except Exception:
             # ignore failures to set limits; proceed without enforcement
             pass

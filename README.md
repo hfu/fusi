@@ -228,6 +228,26 @@ just convert source-store/bulk_all/sample.tif output/sample.pmtiles
   - 対策: `GDAL_CACHEMAX=128–256` に下げる、`--warp-threads 1` を指定、`--io-sleep-ms 5–10` に増やす、BBOX を絞る。
   - `TMPDIR` を必ず出力側（外付けSSD等）に設定。環境変数の誤記に注意。
 
+### Watchdog / TMPDIR recommendations
+
+- New flags: `--watchdog-memory-mb` and `--watchdog-time-seconds` are available
+  for worker processes (when running `pipelines.aggregate_by_zoom` or via
+  `split_aggregate` forwarding). These spawn a small background monitor that
+  will send a `SIGTERM` to the worker if the runtime or RSS memory exceeds the
+  configured limits (best-effort; `psutil` is used if available).
+
+- Example: run a memory-limited split aggregate with TMPDIR set to your external
+  disk and a 10 GiB watchdog:
+
+```bash
+TMPDIR="$PWD/output" GDAL_CACHEMAX=256 \
+  pipenv run python -u -m pipelines.split_aggregate \
+  --verbose --watchdog-memory-mb 10240 dem1a dem10b
+```
+
+Set `TMPDIR` to point to the external SSD (or use `--tmpdir` in the wrapper
+scripts) so temporary files are not written to the macOS system volume.
+
 - **MapLibre の “dem dimension mismatch”**
   - 原因: `raster-dem` の期待サイズと提供タイルサイズが異なる場合に発生。Terrarium は 512×512 前提。ソース設定の `tileSize` と `encoding` を確認。
   - 検証: MBTiles からサンプルタイルを取り出し、WebP をデコードして画像サイズが 512×512 であることを確認。

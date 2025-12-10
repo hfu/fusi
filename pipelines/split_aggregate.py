@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import shutil
 import subprocess
@@ -45,6 +46,10 @@ def run_split_aggregate(
     keep_intermediates: bool = False,
     spawn_per_group: bool = True,
     max_memory_mb: Optional[int] = None,
+    tmpdir: Optional[Path] = None,
+    watchdog_memory_mb: Optional[int] = None,
+    watchdog_time_seconds: Optional[int] = None,
+    watchdog_interval_seconds: float = 0.5,
 ) -> None:
     """Zoom分割を使ったaggregate処理を実行する。
 
@@ -193,9 +198,23 @@ def run_split_aggregate(
                 if max_memory_mb is not None:
                     cmd.extend(["--max-memory-mb", str(int(max_memory_mb))])
 
+                # Forward watchdog args to worker
+                if watchdog_memory_mb is not None:
+                    cmd.extend(["--watchdog-memory-mb", str(int(watchdog_memory_mb))])
+                if watchdog_time_seconds is not None:
+                    cmd.extend(["--watchdog-time-seconds", str(int(watchdog_time_seconds))])
+                if watchdog_interval_seconds is not None:
+                    cmd.extend(["--watchdog-interval-seconds", str(float(watchdog_interval_seconds))])
+
+                # If caller requested a specific TMPDIR, set it in the child's env
+                env = None
+                if tmpdir is not None:
+                    env = os.environ.copy()
+                    env["TMPDIR"] = str(tmpdir)
+
                 if verbose:
                     print(f"Spawning subprocess for group {i+1}: {' '.join(cmd)}")
-                subprocess.check_call(cmd)
+                subprocess.check_call(cmd, env=env)
             else:
                 # If running in-process, enforce memory limits (best-effort)
                 if max_memory_mb is not None:
@@ -210,6 +229,13 @@ def run_split_aggregate(
                                 resource.setrlimit(resource.RLIMIT_RSS, (limit_bytes, limit_bytes))
                             except Exception:
                                 pass
+                    except Exception:
+                        pass
+
+                # If requested, ensure the running process uses the provided TMPDIR
+                if tmpdir is not None:
+                    try:
+                        os.environ["TMPDIR"] = str(tmpdir)
                     except Exception:
                         pass
 
@@ -433,6 +459,30 @@ def parse_args() -> argparse.Namespace:
         help="Sleep milliseconds per tile",
     )
     parser.add_argument(
+        "--watchdog-memory-mb",
+        type=int,
+        default=None,
+        help="Forward watchdog memory limit (MiB) to worker subprocesses",
+    )
+    parser.add_argument(
+        "--watchdog-time-seconds",
+        type=int,
+        default=None,
+        help="Forward watchdog runtime limit (seconds) to worker subprocesses",
+    )
+    parser.add_argument(
+        "--watchdog-interval-seconds",
+        type=float,
+        default=0.5,
+        help="Forward watchdog check interval (seconds) to worker subprocesses",
+    )
+    parser.add_argument(
+        "--tmpdir",
+        type=Path,
+        default=None,
+        help="Temporary directory path for worker processes (overrides TMPDIR env)",
+    )
+    parser.add_argument(
         "--warp-threads",
         type=int,
         default=1,
@@ -511,6 +561,10 @@ def main() -> None:
             keep_intermediates=args.keep_intermediates,
             spawn_per_group=(not args.no_spawn_per_group) and bool(args.spawn_per_group),
             max_memory_mb=args.max_memory_mb,
+            tmpdir=args.tmpdir,
+            watchdog_memory_mb=args.watchdog_memory_mb,
+            watchdog_time_seconds=args.watchdog_time_seconds,
+            watchdog_interval_seconds=args.watchdog_interval_seconds,
         )
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
