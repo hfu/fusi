@@ -24,6 +24,13 @@ if [ -n "$TMPDIR_OVERRIDE" ]; then
   echo "Using TMPDIR override: $TMPDIR"
 else
   export TMPDIR="$CD/output"
+  # Recommended defaults to reduce WAL growth and I/O bursts on heavy MBTiles writes.
+  # These can be tuned per-machine or overridden in the environment before invoking this
+  # helper. Units: checkpoint interval = tiles, commit sleep = seconds.
+  export FUSI_MB_WAL_AUTOCHECKPOINT=${FUSI_MB_WAL_AUTOCHECKPOINT:-500}
+  export FUSI_MB_CHECKPOINT_INTERVAL=${FUSI_MB_CHECKPOINT_INTERVAL:-2000}
+  export FUSI_MB_COMMIT_SLEEP_SEC=${FUSI_MB_COMMIT_SLEEP_SEC:-0.05}
+  export FUSI_MB_BATCH_SLEEP_SEC=${FUSI_MB_BATCH_SLEEP_SEC:-0.01}
   echo "Using TMPDIR default: $TMPDIR"
 fi
 export GDAL_CACHEMAX=64

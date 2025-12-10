@@ -79,6 +79,13 @@ export TMPDIR
 export GDAL_CACHEMAX=64
 export OMP_NUM_THREADS=1
 export GDAL_NUM_THREADS=1
+# Recommended defaults to reduce WAL growth and I/O bursts on heavy MBTiles writes.
+# These can be tuned per-machine or overridden in the environment before invoking this
+# wrapper. Units: checkpoint interval = tiles, commit sleep = seconds.
+export FUSI_MB_WAL_AUTOCHECKPOINT=${FUSI_MB_WAL_AUTOCHECKPOINT:-500}
+export FUSI_MB_CHECKPOINT_INTERVAL=${FUSI_MB_CHECKPOINT_INTERVAL:-2000}
+export FUSI_MB_COMMIT_SLEEP_SEC=${FUSI_MB_COMMIT_SLEEP_SEC:-0.05}
+export FUSI_MB_BATCH_SLEEP_SEC=${FUSI_MB_BATCH_SLEEP_SEC:-0.01}
 
 LOGFILE="$WORKDIR/output/aggregate_run_$(date +%s).log"
 
