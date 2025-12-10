@@ -26,6 +26,7 @@ from .zoom_split_config import (
 )
 from .memory_monitor import get_rss_bytes, format_bytes
 from .uss_monitor import USSMonitor
+from .spinner import register_gc_spinner
 import csv
 from datetime import datetime
 
@@ -77,6 +78,13 @@ def run_split_aggregate(
         # Log spawn-per-group status clearly at startup
         try:
             print(f"Note: spawn-per-group is {'enabled' if spawn_per_group else 'disabled'} (default: enabled)")
+        except Exception:
+            pass
+        # Register a lightweight GC spinner so frequent GC events don't
+        # flood logs with '.' characters; the spinner writes a rotating
+        # character with '\r' instead.
+        try:
+            register_gc_spinner()
         except Exception:
             pass
 
