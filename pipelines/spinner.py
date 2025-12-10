@@ -15,6 +15,7 @@ the callback when requested.
 from __future__ import annotations
 
 import gc
+import os
 import sys
 import threading
 import time
@@ -46,9 +47,15 @@ class Spinner:
                 return
             ch = tuple(self.FRAMES)[self._idx % len(tuple(self.FRAMES))]
             try:
-                # Use \r to overwrite the current line and flush immediately.
-                sys.stdout.write("\r" + ch)
-                sys.stdout.flush()
+                # Only emit visual updates to an interactive TTY unless the
+                # caller explicitly forces spinner output via the
+                # `FUSI_FORCE_SPINNER` env var. Writing spinner frames into
+                # a logfile is noisy and can corrupt single-line log readers.
+                force = os.environ.get("FUSI_FORCE_SPINNER", "")
+                if sys.stdout.isatty() or force.lower() in ("1", "true", "yes"):
+                    # Use \r to overwrite the current line and flush immediately.
+                    sys.stdout.write("\r" + ch)
+                    sys.stdout.flush()
             except Exception:
                 # Never let the spinner crash the host process.
                 pass
@@ -58,8 +65,13 @@ class Spinner:
     def clear(self) -> None:
         """Clear the spinner character (write carriage return + space)."""
         try:
-            sys.stdout.write("\r ")
-            sys.stdout.flush()
+            if sys.stdout.isatty() or os.environ.get("FUSI_FORCE_SPINNER", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                sys.stdout.write("\r ")
+                sys.stdout.flush()
         except Exception:
             pass
 
@@ -94,6 +106,13 @@ def register_gc_spinner() -> None:
     # Defensive: don't register if gc.callbacks is not present
     cb_list = getattr(gc, "callbacks", None)
     if cb_list is None:
+        return
+
+    # If stdout is not a TTY and the user hasn't explicitly forced the
+    # spinner with FUSI_FORCE_SPINNER, skip registering so we don't write
+    # spinner frames into logfiles/redirected output.
+    force = os.environ.get("FUSI_FORCE_SPINNER", "")
+    if not (sys.stdout.isatty() or force.lower() in ("1", "true", "yes")):
         return
 
     # Avoid duplicate registration
