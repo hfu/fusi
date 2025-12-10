@@ -9,6 +9,7 @@ numpy = "*"
 mercantile = "*"
 imagecodecs = "*"
 pmtiles = "*"
+pillow = "*"
 
 [dev-packages]
 pytest = "*"
