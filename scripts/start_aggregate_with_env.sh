@@ -30,12 +30,28 @@ while [[ $# -gt 0 ]]; do
     --workdir) WORKDIR="$2"; shift 2;;
     --tmpdir) TMPDIR_OVERRIDE="$2"; shift 2;;
     --cmd)
-      # Capture the remainder of the command line as the command to run.
-      # This is more robust than taking a single token and avoids
-      # common quoting pitfalls when callers pass a whole command string.
+      # Capture the command to run as the next set of tokens up until the
+      # next recognized wrapper flag (so callers can put wrapper flags like
+      # --follow after --cmd). This allows both forms:
+      #   ./start_aggregate_with_env.sh --cmd "just ..." --follow
+      #   ./start_aggregate_with_env.sh --cmd just ... --follow
       shift
-      CMD="$*"
-      break
+      cmd_parts=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --workdir|--tmpdir|--follow|--help|--cmd)
+            # Stop capturing when we hit a wrapper flag; leave it for the
+            # outer loop to consume.
+            break
+            ;;
+          *)
+            cmd_parts+=("$1")
+            shift
+            ;;
+        esac
+      done
+      # Join parts preserving spacing
+      CMD="${cmd_parts[*]}"
       ;;
     --help) usage; exit 0;;
     --follow) FOLLOW=1; shift ;;
