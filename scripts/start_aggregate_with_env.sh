@@ -28,7 +28,14 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --workdir) WORKDIR="$2"; shift 2;;
     --tmpdir) TMPDIR_OVERRIDE="$2"; shift 2;;
-    --cmd) CMD="$2"; shift 2;;
+    --cmd)
+      # Capture the remainder of the command line as the command to run.
+      # This is more robust than taking a single token and avoids
+      # common quoting pitfalls when callers pass a whole command string.
+      shift
+      CMD="$*"
+      break
+      ;;
     --help) usage; exit 0;;
     *) echo "Unknown arg: $1"; usage; exit 2;;
   esac
@@ -58,6 +65,9 @@ export GDAL_NUM_THREADS=1
 LOGFILE="$WORKDIR/output/aggregate_run_$(date +%s).log"
 
 echo "Starting command with envs: TMPDIR=$TMPDIR GDAL_CACHEMAX=$GDAL_CACHEMAX OMP_NUM_THREADS=$OMP_NUM_THREADS GDAL_NUM_THREADS=$GDAL_NUM_THREADS" | tee "$LOGFILE"
+
+# Log the exact command we're about to run for later debugging.
+echo "CMD: $CMD" >> "$LOGFILE"
 
 # Run the command in a nohup backgrounded shell so it survives disconnects.
 nohup bash -lc "cd '$WORKDIR' && $CMD" >> "$LOGFILE" 2>&1 &
