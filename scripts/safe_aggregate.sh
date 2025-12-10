@@ -27,10 +27,13 @@ else
   # Recommended defaults to reduce WAL growth and I/O bursts on heavy MBTiles writes.
   # These can be tuned per-machine or overridden in the environment before invoking this
   # helper. Units: checkpoint interval = tiles, commit sleep = seconds.
-  export FUSI_MB_WAL_AUTOCHECKPOINT=${FUSI_MB_WAL_AUTOCHECKPOINT:-500}
-  export FUSI_MB_CHECKPOINT_INTERVAL=${FUSI_MB_CHECKPOINT_INTERVAL:-2000}
-  export FUSI_MB_COMMIT_SLEEP_SEC=${FUSI_MB_COMMIT_SLEEP_SEC:-0.05}
-  export FUSI_MB_BATCH_SLEEP_SEC=${FUSI_MB_BATCH_SLEEP_SEC:-0.01}
+  # Tuned defaults based on recent run telemetry (WAL sizes ~100MB):
+  # - Lower checkpoint interval to keep .wal smaller
+  # - Increase small commit sleeps so disk IO bursts are smoothed
+  export FUSI_MB_WAL_AUTOCHECKPOINT=${FUSI_MB_WAL_AUTOCHECKPOINT:-200}
+  export FUSI_MB_CHECKPOINT_INTERVAL=${FUSI_MB_CHECKPOINT_INTERVAL:-1000}
+  export FUSI_MB_COMMIT_SLEEP_SEC=${FUSI_MB_COMMIT_SLEEP_SEC:-0.10}
+  export FUSI_MB_BATCH_SLEEP_SEC=${FUSI_MB_BATCH_SLEEP_SEC:-0.02}
   echo "Using TMPDIR default: $TMPDIR"
 fi
 export GDAL_CACHEMAX=64

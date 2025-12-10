@@ -241,6 +241,9 @@ just convert source-store/bulk_all/sample.tif output/sample.pmtiles
 
 ```bash
 TMPDIR="$PWD/output" GDAL_CACHEMAX=256 \
+  FUSI_MB_CHECKPOINT_INTERVAL=1000 \
+  FUSI_MB_COMMIT_SLEEP_SEC=0.10 \
+  FUSI_MB_BATCH_SLEEP_SEC=0.02 \
   pipenv run python -u -m pipelines.split_aggregate \
   --verbose --watchdog-memory-mb 10240 dem1a dem10b
 ```

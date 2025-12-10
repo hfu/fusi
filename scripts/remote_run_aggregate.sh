@@ -70,10 +70,10 @@ fi
 # Export conservative MBTiles/SQLite throttling defaults on the remote side
 # These may be overridden by setting the respective env vars in the invoking
 # SSH command (we also pass them through when present).
-export FUSI_MB_WAL_AUTOCHECKPOINT=${FUSI_MB_WAL_AUTOCHECKPOINT:-500}
-export FUSI_MB_CHECKPOINT_INTERVAL=${FUSI_MB_CHECKPOINT_INTERVAL:-2000}
-export FUSI_MB_COMMIT_SLEEP_SEC=${FUSI_MB_COMMIT_SLEEP_SEC:-0.05}
-export FUSI_MB_BATCH_SLEEP_SEC=${FUSI_MB_BATCH_SLEEP_SEC:-0.01}
+export FUSI_MB_WAL_AUTOCHECKPOINT=${FUSI_MB_WAL_AUTOCHECKPOINT:-200}
+export FUSI_MB_CHECKPOINT_INTERVAL=${FUSI_MB_CHECKPOINT_INTERVAL:-1000}
+export FUSI_MB_COMMIT_SLEEP_SEC=${FUSI_MB_COMMIT_SLEEP_SEC:-0.10}
+export FUSI_MB_BATCH_SLEEP_SEC=${FUSI_MB_BATCH_SLEEP_SEC:-0.02}
 # activate pipenv if present, otherwise rely on system python
 if [ -f Pipfile ]; then
   CMD_PREFIX="pipenv run"
