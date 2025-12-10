@@ -1,0 +1,2 @@
+  PID  PPID USER COMM             ARGS
+46627 46403 hfu  /opt/homebrew/Ce /opt/homebrew/Cellar/python@3.11/3.11.13/Frameworks/Python.framework/Versions/3.11/Resources/Python.app/Contents/MacOS/Python -u -m pipelines.split_aggregate --verbose dem10a dem10b

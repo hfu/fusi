@@ -1,0 +1,15 @@
+index|idx_tiles_zxy|tiles|CREATE INDEX idx_tiles_zxy
+                ON tiles(zoom_level, tile_column, tile_row)
+index|sqlite_autoindex_metadata_1|metadata|
+index|sqlite_autoindex_tiles_1|tiles|
+table|metadata|metadata|CREATE TABLE metadata (
+                name TEXT PRIMARY KEY,
+                value TEXT
+            )
+table|tiles|tiles|CREATE TABLE tiles (
+                zoom_level INTEGER,
+                tile_column INTEGER,
+                tile_row INTEGER,
+                tile_data BLOB,
+                UNIQUE(zoom_level, tile_column, tile_row)
+            )

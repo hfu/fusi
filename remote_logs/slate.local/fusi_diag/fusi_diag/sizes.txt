@@ -1,0 +1,4 @@
+=== LS -lh ===
+-rw-r--r--  1 hfu  staff    10G Dec 10 11:48 /Volumes/Migrate-2025-04/github/fusi/output/fusi_z13-14.pmtiles.mbtiles
+-rw-r--r--  1 hfu  staff   256K Dec 10 08:46 /Volumes/Migrate-2025-04/github/fusi/output/fusi_z13-14.pmtiles.mbtiles-shm
+-rw-r--r--  1 hfu  staff   107M Dec 10 11:48 /Volumes/Migrate-2025-04/github/fusi/output/fusi_z13-14.pmtiles.mbtiles-wal

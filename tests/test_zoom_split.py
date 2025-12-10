@@ -29,15 +29,11 @@ def test_split_patterns():
     patterns = ["balanced", "safe", "fast", "incremental", "single"]
 
     for pattern_name in patterns:
-        try:
-            groups = get_split_pattern(pattern_name)
-            validate_split_pattern(groups)
-            print(f"✓ {pattern_name}: {len(groups)} groups, valid")
-        except Exception as e:
-            print(f"✗ {pattern_name}: {e}")
-            return False
+        groups = get_split_pattern(pattern_name)
+        validate_split_pattern(groups)
+        print(f"✓ {pattern_name}: {len(groups)} groups, valid")
 
-    return True
+    assert True
 
 
 def test_tile_estimation():
@@ -54,20 +50,13 @@ def test_tile_estimation():
     ]
 
     for min_z, max_z, bbox, _ in test_cases:
-        try:
-            count = estimate_tile_count(min_z, max_z, bbox)
-            # Basic sanity: at least 1 tile should be returned for any bbox
-            if count >= 1:
-                bbox_str = f"bbox={bbox}" if bbox else "Japan"
-                print(f"✓ z{min_z}-{max_z} ({bbox_str}): {count:,} tiles")
-            else:
-                print(f"✗ z{min_z}-{max_z}: {count:,} tiles (expected >=1)")
-                return False
-        except Exception as e:
-            print(f"✗ z{min_z}-{max_z}: {e}")
-            return False
+        count = estimate_tile_count(min_z, max_z, bbox)
+        # Basic sanity: at least 1 tile should be returned for any bbox
+        assert count >= 1
+        bbox_str = f"bbox={bbox}" if bbox else "Japan"
+        print(f"✓ z{min_z}-{max_z} ({bbox_str}): {count:,} tiles")
 
-    return True
+    assert True
 
 
 def test_memory_estimation():
@@ -83,19 +72,12 @@ def test_memory_estimation():
     ]
 
     for min_z, max_z in test_cases:
-        try:
-            memory_gb = estimate_memory_for_zoom_range(min_z, max_z)
-            # Basic sanity: memory estimate should be positive
-            if memory_gb > 0:
-                print(f"✓ z{min_z}-{max_z}: {memory_gb:.1f}GB")
-            else:
-                print(f"✗ z{min_z}-{max_z}: {memory_gb:.1f}GB (expected > 0)")
-                return False
-        except Exception as e:
-            print(f"✗ z{min_z}-{max_z}: {e}")
-            return False
+        memory_gb = estimate_memory_for_zoom_range(min_z, max_z)
+        # Basic sanity: memory estimate should be positive
+        assert memory_gb > 0
+        print(f"✓ z{min_z}-{max_z}: {memory_gb:.1f}GB")
 
-    return True
+    assert True
 
 
 def test_custom_split():
@@ -104,19 +86,13 @@ def test_custom_split():
     print("Test 4: Custom Split Creation")
     print("=" * 60)
 
-    try:
-        # Create custom split and validate basic properties
-        groups = create_custom_split(max_zoom=16, target_memory_gb=10.0)
-        validate_split_pattern(groups)
-        if len(groups) > 0:
-            print(f"✓ Custom split created: {len(groups)} groups")
-            return True
-        else:
-            print("✗ Custom split created no groups")
-            return False
-    except Exception as e:
-        print(f"✗ Custom split creation failed: {e}")
-        return False
+    # Create custom split and validate basic properties
+    groups = create_custom_split(max_zoom=16, target_memory_gb=10.0)
+    validate_split_pattern(groups)
+    assert len(groups) > 0
+    print(f"✓ Custom split created: {len(groups)} groups")
+
+    assert True
 
 
 def test_imports():
@@ -133,12 +109,8 @@ def test_imports():
     ]
 
     # Require zoom_split_config to import; other modules are optional
-    try:
-        __import__(modules[0][0])
-        print(f"✓ {modules[0][1]}")
-    except ImportError as e:
-        print(f"✗ {modules[0][1]}: {e}")
-        return False
+    __import__(modules[0][0])
+    print(f"✓ {modules[0][1]}")
 
     try:
         __import__(modules[1][0])
@@ -146,7 +118,7 @@ def test_imports():
     except ImportError as e:
         print(f"⚠ {modules[1][1]}: {e} (optional) ")
 
-    return True
+    assert True
 
 
 def main():

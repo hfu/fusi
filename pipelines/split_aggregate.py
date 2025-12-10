@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import shutil
 import subprocess
 import time
@@ -24,6 +25,9 @@ from .zoom_split_config import (
     ZoomGroup,
 )
 from .memory_monitor import get_rss_bytes, format_bytes
+from .uss_monitor import USSMonitor
+import csv
+from datetime import datetime
 
 
 def run_split_aggregate(
@@ -38,6 +42,7 @@ def run_split_aggregate(
     warp_threads: int = 1,
     overwrite: bool = False,
     keep_intermediates: bool = False,
+    spawn_per_group: bool = True,
 ) -> None:
     """Zoom分割を使ったaggregate処理を実行する。
 
@@ -69,6 +74,11 @@ def run_split_aggregate(
         print(f"Output: {output_pmtiles}")
         print(f"Sources: {', '.join(sources)}")
         print_split_summary(groups)
+        # Log spawn-per-group status clearly at startup
+        try:
+            print(f"Note: spawn-per-group is {'enabled' if spawn_per_group else 'disabled'} (default: enabled)")
+        except Exception:
+            pass
 
     # ソースレコードを構築
     if verbose:
@@ -82,6 +92,21 @@ def run_split_aggregate(
 
     # 各グループを順次処理
     start_group = resume_from if resume_from is not None else 0
+
+    # CSV for USS/RSS summary per group
+    uss_csv_path = output_dir / f"{output_pmtiles.stem}_uss_summary.csv"
+    uss_header = [
+        "timestamp",
+        "group_index",
+        "group_name",
+        "min_zoom",
+        "max_zoom",
+        "rss_before_bytes",
+        "rss_after_bytes",
+        "rss_delta_bytes",
+        "uss_peak_bytes",
+        "elapsed_seconds",
+    ]
 
     for i, group in enumerate(groups):
         if i < start_group:
@@ -110,6 +135,14 @@ def run_split_aggregate(
         except Exception:
             rss_before = None
 
+        # Start USS sampler to record peak unique memory during the group
+        uss_monitor = USSMonitor(interval=0.5)
+        try:
+            uss_monitor.start()
+        except Exception:
+            # ignore sampler failures; we'll still report RSS after
+            pass
+
         group_start_time = time.time()
 
         # グループ用の中間MBTilesファイル
@@ -117,18 +150,49 @@ def run_split_aggregate(
 
         try:
             # ズーム範囲でaggregate実行
-            aggregate_zoom_range(
-                records=records,
-                output_mbtiles=intermediate_path,
-                min_zoom=group.min_zoom,
-                max_zoom=group.max_zoom,
-                bbox_wgs84=bbox_wgs84,
-                progress_interval=progress_interval,
-                verbose=verbose,
-                io_sleep_ms=io_sleep_ms,
-                warp_threads=warp_threads,
-                overwrite=overwrite,
-            )
+            if spawn_per_group:
+                # Run as a separate Python subprocess to ensure memory is
+                # fully released when the process exits.
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "pipelines.aggregate_by_zoom",
+                    "-o",
+                    str(intermediate_path),
+                    "--min-zoom",
+                    str(group.min_zoom),
+                    "--max-zoom",
+                    str(group.max_zoom),
+                    "--progress-interval",
+                    str(progress_interval),
+                    "--io-sleep-ms",
+                    str(io_sleep_ms),
+                    "--warp-threads",
+                    str(warp_threads),
+                ]
+                if verbose:
+                    cmd.append("--verbose")
+                if overwrite:
+                    cmd.append("--overwrite")
+                # Append sources
+                cmd.extend([r.source for r in records])
+
+                if verbose:
+                    print(f"Spawning subprocess for group {i+1}: {' '.join(cmd)}")
+                subprocess.check_call(cmd)
+            else:
+                aggregate_zoom_range(
+                    records=records,
+                    output_mbtiles=intermediate_path,
+                    min_zoom=group.min_zoom,
+                    max_zoom=group.max_zoom,
+                    bbox_wgs84=bbox_wgs84,
+                    progress_interval=progress_interval,
+                    verbose=verbose,
+                    io_sleep_ms=io_sleep_ms,
+                    warp_threads=warp_threads,
+                    overwrite=overwrite,
+                )
 
             intermediate_mbtiles.append(intermediate_path)
 
@@ -140,8 +204,57 @@ def run_split_aggregate(
                     if rss_before is not None:
                         diff = rss_after - rss_before
                         print(f"Memory delta for group {i+1}: {format_bytes(diff)}")
+                    # Report USS peak if sampler ran
+                    try:
+                        uss_peak = uss_monitor.peak_bytes
+                        if uss_peak:
+                            print(f"USS peak during group {i+1}: {format_bytes(uss_peak)}")
+                    except Exception:
+                        pass
             except Exception:
                 pass
+            finally:
+                try:
+                    uss_monitor.stop()
+                except Exception:
+                    pass
+
+            # Persist per-group memory stats to CSV
+            try:
+                uss_peak_val = 0
+                try:
+                    uss_peak_val = int(uss_monitor.peak_bytes)
+                except Exception:
+                    uss_peak_val = 0
+
+                rss_before_val = int(rss_before) if rss_before is not None else ""
+                rss_after_val = int(rss_after) if 'rss_after' in locals() and rss_after is not None else ""
+                rss_delta_val = int(diff) if 'diff' in locals() else ""
+                elapsed = time.time() - group_start_time
+
+                write_header = not uss_csv_path.exists()
+                with open(uss_csv_path, "a", newline="", encoding="utf-8") as fh:
+                    writer = csv.writer(fh)
+                    if write_header:
+                        writer.writerow(uss_header)
+                    writer.writerow(
+                        [
+                            datetime.utcnow().isoformat() + "Z",
+                            i,
+                            group.name,
+                            group.min_zoom,
+                            group.max_zoom,
+                            rss_before_val,
+                            rss_after_val,
+                            rss_delta_val,
+                            uss_peak_val,
+                            f"{elapsed:.3f}",
+                        ]
+                    )
+                if verbose:
+                    print(f"Wrote USS/RSS summary to: {uss_csv_path}")
+            except Exception as e:
+                print(f"Warning: Failed to write USS summary CSV: {e}")
 
             group_elapsed = time.time() - group_start_time
             if verbose:
@@ -304,6 +417,22 @@ def parse_args() -> argparse.Namespace:
         help="Keep intermediate MBTiles files after merging",
     )
     parser.add_argument(
+        "--spawn-per-group",
+        action="store_true",
+        help=(
+            "Run each zoom-group aggregation in a separate subprocess (helps release memory "
+            "between groups). NOTE: enabled by default to prioritize memory safety."
+        ),
+    )
+    # Default to True to prioritize memory safety; provide --no-spawn-per-group
+    # as an explicit opt-out if desired.
+    parser.set_defaults(spawn_per_group=True)
+    parser.add_argument(
+        "--no-spawn-per-group",
+        action="store_true",
+        help="Disable spawning per-group (run in-process)",
+    )
+    parser.add_argument(
         "sources",
         nargs="+",
         help="Source names under source-store/",
@@ -342,6 +471,7 @@ def main() -> None:
             warp_threads=args.warp_threads,
             overwrite=args.overwrite,
             keep_intermediates=args.keep_intermediates,
+            spawn_per_group=(not args.no_spawn_per_group) and bool(args.spawn_per_group),
         )
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")

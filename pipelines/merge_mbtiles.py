@@ -118,6 +118,11 @@ def get_tile_stats(mbtiles_path: Path) -> Dict[str, any]:
         # ズーム範囲
         cur = conn.execute("SELECT MIN(zoom_level), MAX(zoom_level) FROM tiles")
         min_zoom, max_zoom = cur.fetchone()
+        # sqlite returns None when no rows; normalize to None
+        if min_zoom is None:
+            min_zoom = None
+        if max_zoom is None:
+            max_zoom = None
 
         # バウンディングボックス（XYZ座標で計算）。mercantileが利用可能なら詳細に計算。
         min_lon = math.inf
@@ -204,14 +209,15 @@ def merge_mbtiles_files(
             raise ValueError(f"Tile overlaps detected:\n{error_msg}")
 
     # 統計情報の収集
-    if verbose:
-        print("\nInput files:")
-        for i, path in enumerate(input_paths, start=1):
-            stats = get_tile_stats(path)
-            print(
-                f"  {i}. {path.name}: {stats['tile_count']:,} tiles, "
-                f"z{stats['min_zoom']}-{stats['max_zoom']}"
-            )
+        if verbose:
+            print("\nInput files:")
+            for i, path in enumerate(input_paths, start=1):
+                stats = get_tile_stats(path)
+                zmin = stats['min_zoom'] if stats['min_zoom'] is not None else 'n/a'
+                zmax = stats['max_zoom'] if stats['max_zoom'] is not None else 'n/a'
+                print(
+                    f"  {i}. {path.name}: {stats['tile_count']:,} tiles, z{zmin}-{zmax}"
+                )
 
     # 出力MBTilesの作成
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,16 +326,40 @@ def merge_mbtiles_files(
                 conn_in.close()
 
         # メタデータの書き込み
-        # 最初の入力ファイルからベースメタデータを取得
-        base_metadata = get_mbtiles_metadata(input_paths[0])
+        # 各入力ファイルからメタデータを収集してマージ（attribution等は重複をまとめる）
+        all_metadata: List[Dict[str, str]] = [get_mbtiles_metadata(p) for p in input_paths]
 
-        # 統合されたメタデータを作成
+        # Prefer the first file's name/format/encoding, but merge attribution across inputs.
+        base_metadata = all_metadata[0] if all_metadata else {}
+
+        attributions: Set[str] = set()
+        for md in all_metadata:
+            a = md.get("attribution")
+            if a:
+                attributions.add(a.strip())
+
+        combined_attribution = " | ".join(sorted(attributions)) if attributions else base_metadata.get("attribution", "国土地理院 (GSI Japan)")
+
+        # If we couldn't determine global min/max zoom (no tiles), fall back to
+        # first file's metadata values or omit.
+        minzoom_val = (
+            str(int(global_min_zoom)) if global_min_zoom != math.inf else base_metadata.get("minzoom")
+        )
+        maxzoom_val = (
+            str(int(global_max_zoom)) if global_max_zoom != -math.inf else base_metadata.get("maxzoom")
+        )
+
+        if minzoom_val is None:
+            minzoom_val = "0"
+        if maxzoom_val is None:
+            maxzoom_val = "0"
+
         merged_metadata = {
             "name": base_metadata.get("name", output_path.stem),
             "format": base_metadata.get("format", "webp"),
-            "minzoom": str(int(global_min_zoom)) if global_min_zoom != math.inf else base_metadata.get("minzoom", "0"),
-            "maxzoom": str(int(global_max_zoom)) if global_max_zoom != -math.inf else base_metadata.get("maxzoom", "0"),
-            "attribution": base_metadata.get("attribution", "国土地理院 (GSI Japan)"),
+            "minzoom": minzoom_val,
+            "maxzoom": maxzoom_val,
+            "attribution": combined_attribution,
             "encoding": base_metadata.get("encoding", "terrarium"),
         }
 

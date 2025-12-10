@@ -1,0 +1,2 @@
+total 0
+ls: /Volumes/Migrate-2025-04/github/fusi/output: Operation not permitted

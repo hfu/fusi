@@ -31,6 +31,41 @@ def get_rss_bytes() -> int:
     return int(usage)
 
 
+def get_uss_bytes() -> int:
+    """Return best-effort unique set size (USS) in bytes for this process.
+
+    If `psutil` supports `memory_full_info().uss` it will be used. If not
+    available, falls back to RSS via `get_rss_bytes()`.
+    """
+    if psutil is not None:
+        try:
+            proc = psutil.Process(os.getpid())
+            try:
+                mfi = proc.memory_full_info()
+                uss = getattr(mfi, "uss", None)
+                if uss:
+                    return int(uss)
+            except Exception:
+                # memory_full_info may not be available on some platforms
+                pass
+            # Fall back to summing process + children rss if possible
+            try:
+                total = proc.memory_info().rss
+                for child in proc.children(recursive=True):
+                    try:
+                        total += child.memory_info().rss
+                    except Exception:
+                        continue
+                return int(total)
+            except Exception:
+                return int(get_rss_bytes())
+        except Exception:
+            return int(get_rss_bytes())
+
+    # No psutil -> rss fallback
+    return int(get_rss_bytes())
+
+
 def format_bytes(num: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if num < 1024.0:
