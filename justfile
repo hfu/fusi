@@ -138,6 +138,8 @@ inspect pmtiles_file:
 aggregate-split *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Populate positional params from just's arguments
+    set -- {{args}}
     mkdir -p "{{output_dir}}"
     export TMPDIR="$(cd "{{output_dir}}" && pwd)"
     export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
@@ -150,6 +152,8 @@ aggregate-split *args:
 aggregate-zoom min_zoom max_zoom *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Populate positional params from just's arguments
+    set -- {{args}}
     mkdir -p "{{output_dir}}"
     export TMPDIR="$(cd "{{output_dir}}" && pwd)"
     export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
