@@ -182,8 +182,12 @@ def run_split_aggregate(
                     cmd.append("--verbose")
                 if overwrite:
                     cmd.append("--overwrite")
-                # Append sources
-                cmd.extend([r.source for r in records])
+                # Pass top-level source names (not per-file records). Passing
+                # one argument per GeoTIFF (records) easily exceeds the OS
+                # ARG_MAX and raises "Argument list too long" errors. Use the
+                # original `sources` list (e.g. dem1a, dem5a) which the
+                # aggregate_by_zoom CLI expects.
+                cmd.extend(list(sources))
 
                 if verbose:
                     print(f"Spawning subprocess for group {i+1}: {' '.join(cmd)}")
