@@ -23,7 +23,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest psutil
+          # Install lightweight test dependencies first. Pillow (PIL)
+          # is required by `pipelines.imagecodecs` during test collection.
+          pip install pytest psutil pillow
 
       - name: Cache pip
         uses: actions/cache@v4
