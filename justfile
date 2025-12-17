@@ -71,11 +71,21 @@ aggregate *args:
         exit 1
     fi
 
-    # Default output directory used for TMPDIR when not overridden by -o/--output
-    mkdir -p "{{output_dir}}"
-    export TMPDIR="$(cd "{{output_dir}}" && pwd)"
-    # Keep GDAL cache modest unless overridden by user
-    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+        # Ensure a safe TMPDIR: prefer existing $TMPDIR, otherwise create a
+        # per-run temporary directory under output and clean it up on exit.
+        mkdir -p "{{output_dir}}"
+        TMP_CLEANUP=0
+        if [ -z "${TMPDIR:-}" ]; then
+            TMPDIR=$(mktemp -d "{{output_dir}}/tmp.XXXXXX")
+            TMP_CLEANUP=1
+        fi
+        export TMPDIR
+        # Restrict permissions for security
+        chmod 700 "$TMPDIR"
+        # Keep GDAL cache modest unless overridden by user
+        export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+        # Remove created TMPDIR on exit (only if we created it)
+        trap 'if [ "$TMP_CLEANUP" -eq 1 ]; then rm -rf "$TMPDIR"; fi' EXIT
 
     # Pass everything through to the Python CLI。
     # Python側で:
@@ -102,6 +112,7 @@ aggregate *args:
 
     pipenv run python -u -m pipelines.aggregate_pmtiles \
         --verbose \
+            --tmpdir "$TMPDIR" \
         --emit-lineage \
         "$@"
 
@@ -141,12 +152,20 @@ aggregate-split *args:
     # Populate positional params from just's arguments
     set -- {{args}}
     mkdir -p "{{output_dir}}"
-    export TMPDIR="$(cd "{{output_dir}}" && pwd)"
-    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+        TMP_CLEANUP=0
+        if [ -z "${TMPDIR:-}" ]; then
+            TMPDIR=$(mktemp -d "{{output_dir}}/tmp.XXXXXX")
+            TMP_CLEANUP=1
+        fi
+        export TMPDIR
+        chmod 700 "$TMPDIR"
+        export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+        trap 'if [ "$TMP_CLEANUP" -eq 1 ]; then rm -rf "$TMPDIR"; fi' EXIT
     
     pipenv run python -u -m pipelines.split_aggregate \
         --verbose \
         --warp-threads 1 \
+            --tmpdir "$TMPDIR" \
         "$@"
 
 
@@ -157,14 +176,22 @@ aggregate-split-lineage *args:
     # Populate positional params from just's arguments
     set -- {{args}}
     mkdir -p "{{output_dir}}"
-    export TMPDIR="$(cd "{{output_dir}}" && pwd)"
-    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+        TMP_CLEANUP=0
+        if [ -z "${TMPDIR:-}" ]; then
+            TMPDIR=$(mktemp -d "{{output_dir}}/tmp.XXXXXX")
+            TMP_CLEANUP=1
+        fi
+        export TMPDIR
+        chmod 700 "$TMPDIR"
+        export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+        trap 'if [ "$TMP_CLEANUP" -eq 1 ]; then rm -rf "$TMPDIR"; fi' EXIT
 
     pipenv run python -u -m pipelines.split_aggregate \
         --verbose \
         --emit-lineage \
         --lineage-suffix=-lineage \
         --warp-threads 1 \
+            --tmpdir "$TMPDIR" \
         "$@"
 
 # 15. Aggregate by z=6 subtree (prototype)

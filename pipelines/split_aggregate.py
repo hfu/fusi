@@ -96,12 +96,18 @@ def run_split_aggregate(
         except Exception:
             pass
 
-    # ソースレコードを構築
-    if verbose:
-        print("Loading source records...")
-    records = build_records_from_sources(sources)
-    if verbose:
-        print(f"Loaded {len(records)} source records\n")
+    # By default avoid building the full list of SourceRecord objects in
+    # the parent process to reduce peak memory usage. When running with
+    # spawn_per_group=True we will let each worker subprocess load the
+    # records it needs. If running in-process (spawn_per_group=False)
+    # we must build records here.
+    records: Optional[List[SourceRecord]] = None
+    if not spawn_per_group:
+        if verbose:
+            print("Loading source records (in-process mode)...")
+        records = build_records_from_sources(sources)
+        if verbose:
+            print(f"Loaded {len(records)} source records\n")
 
     # 中間MBTilesファイルのパスリスト
     intermediate_mbtiles: List[Path] = []
@@ -350,6 +356,12 @@ def run_split_aggregate(
         try:
             if verbose:
                 print("\nEmitting lineage from merged MBTiles...")
+            # Ensure records are available for lineage emission; load
+            # them now (deferred) to avoid holding them during the
+            # main aggregation work.
+            if records is None:
+                records = build_records_from_sources(sources)
+
             emit_lineage_from_mbtiles(
                 records=records,
                 mbtiles_path=merged_mbtiles,
@@ -373,8 +385,14 @@ def run_split_aggregate(
         if pmtiles_exe:
             if verbose:
                 print(f"Using: {pmtiles_exe}")
+            # Ensure TMPDIR is set in the environment for the packer
+            env = None
+            if tmpdir is not None:
+                env = os.environ.copy()
+                env["TMPDIR"] = str(tmpdir)
             subprocess.check_call(
-                [pmtiles_exe, "convert", str(merged_mbtiles), str(output_pmtiles)]
+                [pmtiles_exe, "convert", str(merged_mbtiles), str(output_pmtiles)],
+                env=env,
             )
             if verbose:
                 print(f"\nPMTiles created: {output_pmtiles}")
@@ -544,21 +562,33 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After merging, emit per-tile lineage MBTiles/PMTiles (I/O intensive)",
     )
-    parser.add_argument(
-        "--lineage-suffix",
-        default="-lineage",
-        help="Suffix for lineage MBTiles/PMTiles (default: '-lineage')",
-    )
-    parser.add_argument(
-        "sources",
-        nargs="+",
-        help="Source names under source-store/",
-    )
+                # Ensure records are available for lineage emission; load
+                # them now (deferred) to avoid holding them during the
+                # main aggregation work.
+                if records is None:
+                    records = build_records_from_sources(sources)
 
-    args = parser.parse_args()
+                # Ensure TMPDIR is exported while the lineage helper runs so
+                # any packer subprocess uses the correct tempdir.
+                prev_tmp = os.environ.get("TMPDIR")
+                try:
+                    if tmpdir is not None:
+                        os.environ["TMPDIR"] = str(tmpdir)
 
-    # verbose/silentの解決
-    if args.verbose:
+                    emit_lineage_from_mbtiles(
+                        records=records,
+                        mbtiles_path=merged_mbtiles,
+                        pmtiles_path=output_pmtiles,
+                        warp_threads=warp_threads,
+                        lineage_suffix=lineage_suffix,
+                        pmtiles_exe=shutil.which("pmtiles") or shutil.which("pmtiles-cli"),
+                        verbose=verbose,
+                    )
+                finally:
+                    if prev_tmp is None:
+                        os.environ.pop("TMPDIR", None)
+                    else:
+                        os.environ["TMPDIR"] = prev_tmp
         args.verbose = True
     else:
         args.verbose = not args.silent

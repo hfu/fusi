@@ -70,7 +70,7 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SourceRecord:
     """Metadata for a single GeoTIFF derived from bounds.csv."""
 
