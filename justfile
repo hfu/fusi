@@ -146,8 +146,6 @@ aggregate-split *args:
     
     pipenv run python -u -m pipelines.split_aggregate \
         --verbose \
-        # Recommended: redirect TMPDIR to output and supply a watchdog if desired
-        # Example usage: --tmpdir /path/to/output --watchdog-memory-mb 10240
         "$@"
 
 # 15. Aggregate by z=6 subtree (prototype)
