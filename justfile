@@ -162,7 +162,7 @@ aggregate-split-lineage *args:
     pipenv run python -u -m pipelines.split_aggregate \
         --verbose \
         --emit-lineage \
-        --lineage-suffix "-lineage" \
+        --lineage-suffix=-lineage \
         "$@"
 
 # 15. Aggregate by z=6 subtree (prototype)
