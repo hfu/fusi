@@ -60,7 +60,7 @@ def tiles_for_bounds(bbox: Tuple[float, float, float, float], z: int) -> Set[Tup
     return tiles
 
 
-def generate(source_store: Path, z: int = 6, per_source: bool = False):
+def generate(source_store: Path, z: int = 6, per_source: bool = False, max_sources: int = 5):
     source_dirs = [p for p in source_store.iterdir() if p.is_dir()]
     all_tiles: Set[Tuple[int, int]] = set()
     tile_to_sources: Dict[Tuple[int, int], Set[str]] = defaultdict(set)
@@ -92,7 +92,8 @@ def generate(source_store: Path, z: int = 6, per_source: bool = False):
             'y': y,
             'z': z,
             'source_count': len(sources),
-            'sources': sources[:5],
+            # Truncate displayed sources for readability; configurable via --max-sources
+            'sources': sources[:max_sources],
         })
 
     return tile_list, per_source_tiles
@@ -124,6 +125,7 @@ def main(argv=None):
     p.add_argument('--z', type=int, default=6, help='Zoom level for subtree tiling (default 6)')
     p.add_argument('--per-source', action='store_true', help='Also write per-source tile lists')
     p.add_argument('--out', default='output/subtrees.json', help='Output JSON path')
+    p.add_argument('--max-sources', type=int, default=5, help='Maximum number of sources to include per tile in the output (default: 5)')
     args = p.parse_args(argv)
 
     source_store = Path(args.source_store)
@@ -131,7 +133,7 @@ def main(argv=None):
         print(f"Error: source-store not found at {source_store}")
         return 2
 
-    tile_list, per_source_tiles = generate(source_store, z=args.z, per_source=args.per_source)
+    tile_list, per_source_tiles = generate(source_store, z=args.z, per_source=args.per_source, max_sources=args.max_sources)
     write_outputs(tile_list, per_source_tiles, Path(args.out), Path(args.out).parent / 'subtrees_by_source' if args.per_source else None)
     print(f"Wrote {len(tile_list)} tiles to {args.out}")
     return 0
