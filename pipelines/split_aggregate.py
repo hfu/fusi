@@ -562,33 +562,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After merging, emit per-tile lineage MBTiles/PMTiles (I/O intensive)",
     )
-                # Ensure records are available for lineage emission; load
-                # them now (deferred) to avoid holding them during the
-                # main aggregation work.
-                if records is None:
-                    records = build_records_from_sources(sources)
-
-                # Ensure TMPDIR is exported while the lineage helper runs so
-                # any packer subprocess uses the correct tempdir.
-                prev_tmp = os.environ.get("TMPDIR")
-                try:
-                    if tmpdir is not None:
-                        os.environ["TMPDIR"] = str(tmpdir)
-
-                    emit_lineage_from_mbtiles(
-                        records=records,
-                        mbtiles_path=merged_mbtiles,
-                        pmtiles_path=output_pmtiles,
-                        warp_threads=warp_threads,
-                        lineage_suffix=lineage_suffix,
-                        pmtiles_exe=shutil.which("pmtiles") or shutil.which("pmtiles-cli"),
-                        verbose=verbose,
-                    )
-                finally:
-                    if prev_tmp is None:
-                        os.environ.pop("TMPDIR", None)
-                    else:
-                        os.environ["TMPDIR"] = prev_tmp
+    # Normalize verbose flag: explicit --verbose overrides --silent
+    if args.verbose:
         args.verbose = True
     else:
         args.verbose = not args.silent
