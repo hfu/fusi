@@ -48,12 +48,13 @@ else
   IOSTAT_PID=""
 fi
 
-# macOS: fs_usage capture (requires sudo). On Linux this will be skipped.
+    # macOS: fs_usage capture (requires sudo). On Linux this will be skipped.
 FS_LOG="$OUTDIR/fs_usage_${PID}.log"
 if [[ "$(uname -s)" == "Darwin" ]] && command -v fs_usage >/dev/null 2>&1; then
   echo "# fs_usage capturing to $FS_LOG (requires sudo)" >> "$FS_LOG"
   echo "If prompted for password, please enter it. To stop fs_usage press Ctrl-C or kill the monitor script." 
-  ( sudo fs_usage -w -f filesys -p "$PID" > "$FS_LOG" ) &
+      # Note: fs_usage expects the PID as a positional argument, not -p
+      ( sudo fs_usage -w -f filesys "$PID" > "$FS_LOG" ) &
   FS_PID=$!
 else
   echo "# fs_usage not available or not macOS; skipping" >> "$FS_LOG"
