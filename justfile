@@ -150,6 +150,22 @@ aggregate-split *args:
         # Example usage: --tmpdir /path/to/output --watchdog-memory-mb 10240
         "$@"
 
+# 15. Aggregate by z=6 subtree (prototype)
+aggregate-subtree *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Usage example:
+    # just aggregate-subtree --tile 6/12/20 --source dem1a --output-dir output/subtrees
+    set -- {{args}}
+    pipenv run python -u -m pipelines.aggregate_by_subtree "$@"
+
+# Generate subtree list (z6 tile list) from source-store
+generate-subtrees:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p output
+    pipenv run python scripts/generate_subtree_list.py --source-store source-store --out output/subtrees.json "$@"
+
 # 11. Aggregate specific zoom range only
 aggregate-zoom min_zoom max_zoom *args:
     #!/usr/bin/env bash

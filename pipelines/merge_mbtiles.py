@@ -398,6 +398,39 @@ def merge_mbtiles_files(
             print(f"\nMerge completed successfully!")
             print(f"Output: {output_path}")
             print(f"Total tiles: {total_tiles:,}")
+
+
+def _cli_main(argv=None):
+    import argparse
+
+    p = argparse.ArgumentParser(description="Merge multiple MBTiles into one and update metadata")
+    p.add_argument("--output", "-o", required=True, help="Output MBTiles path")
+    p.add_argument("inputs", nargs='+', help="Input MBTiles files to merge")
+    p.add_argument("--no-verify", action='store_true', help="Skip overlap verification")
+    p.add_argument("--overwrite", action='store_true', help="Overwrite existing output")
+    p.add_argument("--quiet", action='store_true', help="Reduce logging output")
+
+    args = p.parse_args(argv)
+
+    input_paths = [Path(x) for x in args.inputs]
+    output_path = Path(args.output)
+
+    try:
+        merge_mbtiles_files(
+            input_paths,
+            output_path,
+            verify_overlaps=not args.no_verify,
+            overwrite=args.overwrite,
+            verbose=not args.quiet,
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(_cli_main())
             # Zoom range
             if global_min_zoom != math.inf and global_max_zoom != -math.inf:
                 print(f"Zoom range: z{int(global_min_zoom)}-{int(global_max_zoom)}")

@@ -58,6 +58,48 @@ just aggregate-zoom 13 14 dem1a -o output/fusi-z13-14.mbtiles
 just aggregate-zoom 0 10 dem1a dem5a dem10b -o output/fusi-z0-10.mbtiles
 ```
 
+### 4. z=6 サブツリー単位の処理（試験的）
+
+Mapterhorn と同様に、z=6 レベルのタイル（およそ地域単位）を単位にして
+高解像度処理を分割する手法をサポートするためのプロトタイプが含まれています。
+
+目的:
+- メモリ使用量と一時スプールを地理的に局所化する
+- サブツリー単位で並列実行・再実行を容易にする
+
+簡単な使い方（プロトタイプ）:
+
+```bash
+# 例: z6 のタイル 6/12/20 を処理、出力先を output/subtrees にする
+just aggregate-subtree --tile 6/12/20 --source dem1a --output-dir output/subtrees
+
+# 複数タイルを同時に指定
+just aggregate-subtree --tile 6/12/20 --tile 6/13/20 \
+  --source dem1a --source dem5a --output-dir output/subtrees --max-zoom 16
+```
+
+出力:
+- 各サブツリーは `output/subtrees/subtree_z6_x<X>_y<Y>_z<MIN>-<MAX>.mbtiles` の
+  形式で書き出されます。作成した MBTiles は `pipelines/merge_mbtiles.py`
+  でマージして最終的な MBTiles（および pmtiles 変換）にまとめてください。
+
+注意点:
+- この機能はプロトタイプであり、マージと検証の自動化は十分に整備されていません。
+- 実運用前に小規模な Dry-run と PMTiles 変換の検証を行ってください（`pmtiles verify`）。
+注意点:
+- この機能はプロトタイプであり、マージと検証の自動化は十分に整備されていません。
+- `scripts/merge_and_verify.sh` を使うと、サブツリー MBTiles のマージ → pmtiles 変換 → `pmtiles verify` → sha256 までを自動で実行できます。使い方の例は下のセクションを参照してください。
+
+小さなワークフロー例（サブツリーのマージと検証）:
+
+```bash
+# 1) サブツリー MBTiles を生成（例: output/subtrees/*.mbtiles）
+just aggregate-subtree --tile 6/12/20 --source dem1a --output-dir output/subtrees
+
+# 2) マージして PMTiles に変換・検証（必要なら --tmpdir を指定）
+./scripts/merge_and_verify.sh output/fusi.mbtiles output/subtrees/*.mbtiles --tmpdir /Volumes/Migrate-2025-04/pmtiles_tmp
+```
+
 ### 4. 複数のMBTilesをマージ
 
 ```bash
