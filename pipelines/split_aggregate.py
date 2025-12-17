@@ -562,6 +562,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After merging, emit per-tile lineage MBTiles/PMTiles (I/O intensive)",
     )
+    parser.add_argument(
+        "--lineage-suffix",
+        type=str,
+        default="-lineage",
+        help="Suffix to append for lineage MBTiles/PMTiles (default: -lineage)",
+    )
     # Positional sources: one or more source names (e.g. dem1a dem5a)
     parser.add_argument(
         "sources",
