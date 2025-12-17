@@ -72,7 +72,9 @@ def aggregate_zoom_range(
 
     # run_aggregateを使用（PMTiles変換なしのためダミーパスを指定）
     # 実際にはMBTilesのみが生成される
-    dummy_pmtiles = mbtiles_path.with_suffix(".pmtiles.tmp")
+    # Use a simple .pmtiles dummy suffix so run_aggregate's conversion
+    # logic produces an MBTiles path by replacing .pmtiles -> .mbtiles
+    dummy_pmtiles = mbtiles_path.with_suffix(".pmtiles")
 
     result_mbtiles = run_aggregate(
         records=records,
