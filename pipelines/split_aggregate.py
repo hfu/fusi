@@ -562,11 +562,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After merging, emit per-tile lineage MBTiles/PMTiles (I/O intensive)",
     )
+    # Positional sources: one or more source names (e.g. dem1a dem5a)
+    parser.add_argument(
+        "sources",
+        nargs="+",
+        help="Source name(s) to aggregate (one or more)",
+    )
+    # Parse args into namespace
+    args = parser.parse_args()
     # Normalize verbose flag: explicit --verbose overrides --silent
-    if args.verbose:
+    if getattr(args, "verbose", False):
         args.verbose = True
     else:
-        args.verbose = not args.silent
+        args.verbose = not getattr(args, "silent", False)
 
     return args
 
