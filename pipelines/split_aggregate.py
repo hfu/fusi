@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from .aggregate_by_zoom import aggregate_zoom_range
-from .aggregate_pmtiles import build_records_from_sources, SourceRecord
+from .aggregate_pmtiles import build_records_from_sources, SourceRecord, emit_lineage_from_mbtiles
 from .merge_mbtiles import merge_mbtiles_files
 from .zoom_split_config import (
     get_split_pattern,
@@ -50,6 +50,8 @@ def run_split_aggregate(
     watchdog_memory_mb: Optional[int] = None,
     watchdog_time_seconds: Optional[int] = None,
     watchdog_interval_seconds: float = 0.5,
+    emit_lineage: bool = False,
+    lineage_suffix: str = "-lineage",
 ) -> None:
     """Zoom分割を使ったaggregate処理を実行する。
 
@@ -343,6 +345,23 @@ def run_split_aggregate(
         print(f"\nError merging MBTiles: {e}")
         raise
 
+    # Optionally emit lineage from the merged MBTiles
+    if emit_lineage:
+        try:
+            if verbose:
+                print("\nEmitting lineage from merged MBTiles...")
+            emit_lineage_from_mbtiles(
+                records=records,
+                mbtiles_path=merged_mbtiles,
+                pmtiles_path=output_pmtiles,
+                warp_threads=warp_threads,
+                lineage_suffix=lineage_suffix,
+                pmtiles_exe=shutil.which("pmtiles") or shutil.which("pmtiles-cli"),
+                verbose=verbose,
+            )
+        except Exception as exc:
+            print(f"Warning: lineage emission failed: {exc}")
+
     # PMTilesに変換
     if verbose:
         print(f"\n{'='*70}")
@@ -521,6 +540,16 @@ def parse_args() -> argparse.Namespace:
         help="Optional soft memory limit for worker subprocesses in MiB (best-effort).",
     )
     parser.add_argument(
+        "--emit-lineage",
+        action="store_true",
+        help="After merging, emit per-tile lineage MBTiles/PMTiles (I/O intensive)",
+    )
+    parser.add_argument(
+        "--lineage-suffix",
+        default="-lineage",
+        help="Suffix for lineage MBTiles/PMTiles (default: '-lineage')",
+    )
+    parser.add_argument(
         "sources",
         nargs="+",
         help="Source names under source-store/",
@@ -565,6 +594,8 @@ def main() -> None:
             watchdog_memory_mb=args.watchdog_memory_mb,
             watchdog_time_seconds=args.watchdog_time_seconds,
             watchdog_interval_seconds=args.watchdog_interval_seconds,
+            emit_lineage=getattr(args, 'emit_lineage', False),
+            lineage_suffix=getattr(args, 'lineage_suffix', '-lineage'),
         )
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")

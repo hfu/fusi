@@ -720,86 +720,15 @@ def run_aggregate(
     # source rasters and can be I/O intensive.
     if emit_lineage:
         try:
-            from .lineage import provenance_to_rgb
-            from . import imagecodecs
-            import sqlite3
-            import mercantile
-
-            lineage_path = mbtiles_path.with_name(mbtiles_path.stem + f"{lineage_suffix}.mbtiles")
-
-            def lineage_generator():
-                # Read the list of written tiles from the primary MBTiles
-                conn = sqlite3.connect(str(mbtiles_path))
-                try:
-                    cur = conn.execute("SELECT zoom_level, tile_column, tile_row FROM tiles")
-                    for z, x, tms_y in cur:
-                        # Convert stored TMS row back to XYZ y
-                        y = (1 << z) - 1 - tms_y
-                        tile = mercantile.Tile(x=x, y=y, z=z)
-                        bounds = mercantile.xy_bounds(tile)
-                        # Filter overlapping records to reduce work
-                        overlapping = [r for r in records if intersects(r.bounds_mercator, (bounds.left, bounds.bottom, bounds.right, bounds.top))]
-                        if not overlapping:
-                            continue
-
-                        merged, provenance = compute_tile_provenance(overlapping, bounds, out_shape=(512, 512), warp_threads=warp_threads)
-                        if provenance is None:
-                            continue
-
-                        rgb = provenance_to_rgb(provenance)
-                        try:
-                            webp = imagecodecs.webp_encode(rgb, lossless=True)
-                        except Exception:
-                            # Fallback: encode PNG via Pillow
-                            from PIL import Image
-
-                            img = Image.fromarray(rgb)
-                            bio = BytesIO()
-                            img.save(bio, format="PNG")
-                            webp = bio.getvalue()
-
-                        yield z, x, y, webp
-                finally:
-                    conn.close()
-
-            # Write lineage MBTiles. Import into a different local name to
-            # avoid shadowing the module-level `create_mbtiles_from_tiles`
-            # symbol which would make it a local variable for the whole
-            # function and cause UnboundLocalError earlier when called.
-            from .mbtiles_writer import create_mbtiles_from_tiles as _create_mbtiles_for_lineage
-
-            print(f"Writing lineage MBTiles: {lineage_path}")
-            _create_mbtiles_for_lineage(lineage_generator(), lineage_path)
-            # Ensure the lineage MBTiles is annotated as such in metadata
-            try:
-                from .mbtiles_writer import MBTilesWriter
-
-                try:
-                    mw = MBTilesWriter(lineage_path)
-                    mw.update_metadata({"encoding": "lineage"})
-                except Exception:
-                    # Non-fatal: metadata update best-effort
-                    pass
-            except Exception:
-                pass
-            # Also attempt to convert lineage MBTiles to PMTiles
-            try:
-                lineage_pm = pmtiles_path.with_name(pmtiles_path.stem + f"{lineage_suffix}.pmtiles")
-                if pmtiles_exe:
-                    print(f"Converting lineage MBTiles to PMTiles via: {pmtiles_exe} convert {lineage_path} {lineage_pm}")
-                    subprocess.check_call([pmtiles_exe, "convert", str(lineage_path), str(lineage_pm)])
-                    print(f"Lineage PMTiles created: {lineage_pm}")
-                else:
-                    try:
-                        from .mbtiles_to_pmtiles import mbtiles_to_pmtiles as pm_fallback2
-
-                        print("pmtiles CLI not found; using Python fallback packer for lineage")
-                        pm_fallback2(lineage_path, lineage_pm)
-                        print(f"Lineage PMTiles created via Python fallback: {lineage_pm}")
-                    except Exception:
-                        print("Warning: no pmtiles CLI found and Python fallback unavailable for lineage; lineage PMTiles not created")
-            except Exception as exc:
-                print(f"Warning: lineage PMTiles conversion failed: {exc}")
+            emit_lineage_from_mbtiles(
+                records=records,
+                mbtiles_path=mbtiles_path,
+                pmtiles_path=pmtiles_path,
+                warp_threads=warp_threads,
+                lineage_suffix=lineage_suffix,
+                pmtiles_exe=shutil.which("pmtiles") or shutil.which("pmtiles-cli"),
+                verbose=verbose,
+            )
         except Exception as exc:  # pragma: no cover - non-fatal optional step
             print(f"Warning: failed to emit lineage MBTiles: {exc}")
 
@@ -808,3 +737,105 @@ def run_aggregate(
 
 if __name__ == "__main__":
     main()
+
+
+def emit_lineage_from_mbtiles(
+    records: Sequence[SourceRecord],
+    mbtiles_path: Path,
+    pmtiles_path: Path,
+    warp_threads: int = 1,
+    lineage_suffix: str = "-lineage",
+    pmtiles_exe: Optional[str] = None,
+    verbose: bool = True,
+) -> None:
+    """Generate lineage MBTiles (and optional PMTiles) from an existing MBTiles file.
+
+    This extracts the lineage-generation logic from `run_aggregate` so other
+    drivers (e.g., split_aggregate) can invoke it after merging intermediate
+    MBTiles.
+    """
+    try:
+        from .lineage import provenance_to_rgb
+        from . import imagecodecs
+        import sqlite3
+        import mercantile
+        from io import BytesIO
+    except Exception:
+        raise
+
+    lineage_path = mbtiles_path.with_name(mbtiles_path.stem + f"{lineage_suffix}.mbtiles")
+
+    def lineage_generator():
+        conn = sqlite3.connect(str(mbtiles_path))
+        try:
+            cur = conn.execute("SELECT zoom_level, tile_column, tile_row FROM tiles")
+            for z, x, tms_y in cur:
+                y = (1 << z) - 1 - tms_y
+                tile = mercantile.Tile(x=x, y=y, z=z)
+                bounds = mercantile.xy_bounds(tile)
+                overlapping = [r for r in records if intersects(r.bounds_mercator, (bounds.left, bounds.bottom, bounds.right, bounds.top))]
+                if not overlapping:
+                    continue
+
+                merged, provenance = compute_tile_provenance(overlapping, bounds, out_shape=(512, 512), warp_threads=warp_threads)
+                if provenance is None:
+                    continue
+
+                rgb = provenance_to_rgb(provenance)
+                try:
+                    webp = imagecodecs.webp_encode(rgb, lossless=True)
+                except Exception:
+                    # Fallback: encode PNG via Pillow
+                    from PIL import Image
+
+                    img = Image.fromarray(rgb)
+                    bio = BytesIO()
+                    img.save(bio, format="PNG")
+                    webp = bio.getvalue()
+
+                yield z, x, y, webp
+        finally:
+            conn.close()
+
+    from .mbtiles_writer import create_mbtiles_from_tiles as _create_mbtiles_for_lineage
+
+    if verbose:
+        print(f"Writing lineage MBTiles: {lineage_path}")
+    _create_mbtiles_for_lineage(lineage_generator(), lineage_path)
+
+    # Annotate metadata best-effort
+    try:
+        from .mbtiles_writer import MBTilesWriter
+
+        try:
+            mw = MBTilesWriter(lineage_path)
+            mw.update_metadata({"encoding": "lineage"})
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Convert lineage MBTiles to PMTiles if possible
+    lineage_pm = pmtiles_path.with_name(pmtiles_path.stem + f"{lineage_suffix}.pmtiles")
+    try:
+        if pmtiles_exe:
+            if verbose:
+                print(f"Converting lineage MBTiles to PMTiles via: {pmtiles_exe} convert {lineage_path} {lineage_pm}")
+            subprocess.check_call([pmtiles_exe, "convert", str(lineage_path), str(lineage_pm)])
+            if verbose:
+                print(f"Lineage PMTiles created: {lineage_pm}")
+        else:
+            try:
+                from .mbtiles_to_pmtiles import mbtiles_to_pmtiles as pm_fallback2
+
+                if verbose:
+                    print("pmtiles CLI not found; using Python fallback packer for lineage")
+                pm_fallback2(lineage_path, lineage_pm)
+                if verbose:
+                    print(f"Lineage PMTiles created via Python fallback: {lineage_pm}")
+            except Exception:
+                if verbose:
+                    print("Warning: no pmtiles CLI found and Python fallback unavailable for lineage; lineage PMTiles not created")
+    except Exception as exc:
+        if verbose:
+            print(f"Warning: lineage PMTiles conversion failed: {exc}")

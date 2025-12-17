@@ -148,6 +148,23 @@ aggregate-split *args:
         --verbose \
         "$@"
 
+
+# Variant: run split aggregate and emit per-tile lineage MBTiles/PMTiles
+aggregate-split-lineage *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Populate positional params from just's arguments
+    set -- {{args}}
+    mkdir -p "{{output_dir}}"
+    export TMPDIR="$(cd "{{output_dir}}" && pwd)"
+    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+
+    pipenv run python -u -m pipelines.split_aggregate \
+        --verbose \
+        --emit-lineage \
+        --lineage-suffix "-lineage" \
+        "$@"
+
 # 15. Aggregate by z=6 subtree (prototype)
 aggregate-subtree *args:
     #!/usr/bin/env bash
