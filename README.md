@@ -169,6 +169,24 @@ sqlite3 output/production-dem1a.mbtiles \
 # 戻り値が "N|N" なら重複はありません。
 ```
 
+#### 推奨: `aggregate-split-lineage` の実行例（TMPDIR 注意）
+
+分割実行かつ系譜（lineage）も出力する場合の推奨コマンド例です。重要: `--tmpdir` に `.` やシステムルートを指定すると、macOS のシステムボリュームの空きが少ない環境で `ENOSPC` エラーが発生することがあります。外付け SSD や大容量マウントを利用するか、`output/` 配下に作成した専用ディレクトリを指定してください。
+
+```bash
+# 事前に TMPDIR を外部ボリュームか output/ 配下に作成しておく
+export TMPDIR="/Volumes/BigDrive/pmtiles_tmp"
+mkdir -p "$TMPDIR" && chmod 700 "$TMPDIR"
+
+just aggregate-split-lineage dem1a dem5a dem5b dem5c dem10a dem10b \
+  -o output/fusi.pmtiles --split-pattern balanced \
+  --overwrite --tmpdir "$TMPDIR" --lineage-suffix=-lineage \
+  --warp-threads 1 --io-sleep-ms 10 2>&1 | tee output/fusi-aggregate.log
+```
+
+短く言うと: `--tmpdir .` のようにカレントディレクトリを渡すのではなく、十分な空き容量がある場所を `TMPDIR` として指定してください。`just` レシピは `TMPDIR` が未設定のとき自動で `output/tmp.*` を作成しますが、大容量の一時領域が必要な場合は明示的に外部ディスクを指定するのが安全です。
+
+
 1. サンプルタイルをいくつか点検して、低優先度ソースが上位ソースの nodata を埋めていることを確認します（ツール: `scripts/inspect_tile_fill.py`）。例:
 
 ```bash
