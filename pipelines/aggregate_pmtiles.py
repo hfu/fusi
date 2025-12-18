@@ -25,9 +25,8 @@ import argparse
 import csv
 import math
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Generator, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Generator, Iterable, List, Optional, Sequence, Tuple, Union, NamedTuple
 import time
 from io import BytesIO
 
@@ -70,9 +69,12 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
-class SourceRecord:
-    """Metadata for a single GeoTIFF derived from bounds.csv."""
+class SourceRecord(NamedTuple):
+    """Lightweight tuple-like record for a single GeoTIFF derived from bounds.csv.
+
+    Using NamedTuple reduces per-record memory compared to a full dataclass
+    while preserving attribute access (e.g. `r.left`).
+    """
 
     path: Path
     left: float

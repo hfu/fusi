@@ -146,7 +146,7 @@ class MBTilesWriter:
         self._max_lon = max(self._max_lon, bounds.east)
         self._max_lat = max(self._max_lat, bounds.north)
 
-    def add_tiles(self, tiles: Iterable[Tuple[int, int, int, bytes]], batch_size: int = 1000) -> None:
+    def add_tiles(self, tiles: Iterable[Tuple[int, int, int, bytes]], batch_size: int = 250) -> None:
         """Insert tiles into the MBTiles file.
 
         `tiles` must yield (z, x, y, data) where (z, x, y) are XYZ.
@@ -319,7 +319,7 @@ class MBTilesWriter:
 def create_mbtiles_from_tiles(
     tiles: Iterable[Tuple[int, int, int, bytes]],
     output_path: Path,
-    batch_size: int = 1000,
+    batch_size: int = 250,
 ) -> None:
     """Convenience wrapper: write all tiles into an MBTiles file.
 
