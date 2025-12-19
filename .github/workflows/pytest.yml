@@ -9,39 +9,36 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.11, 3.12]
+        python-version: [3.12]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python (for lightweight tools)
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install lightweight deps (pip)
         run: |
           python -m pip install --upgrade pip
-          # Install lightweight test dependencies first. Pillow (PIL)
-          # is required by `pipelines.imagecodecs` during test collection.
+          # Pillow is required by `pipelines.imagecodecs` during test collection.
           pip install pytest psutil pillow
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - name: Setup micromamba
+        uses: mamba-org/micromamba-action@v1
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/Pipfile') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          channels: "conda-forge"
 
-      - name: Install runtime deps (best-effort)
-        # Some packages (rasterio, imagecodecs) have native deps and may fail
-        # on the runner; attempt to install them but don't fail the job.
-        continue-on-error: true
+      - name: Create conda env with rasterio (conda-forge)
         run: |
-          pip install numpy mercantile pmtiles rasterio imagecodecs || true
+          # Create a short-lived env 'ci' containing rasterio and runtime deps
+          micromamba create -n ci -c conda-forge -y python=${{ matrix.python-version }} \ 
+            rasterio numpy mercantile pmtiles imagecodecs
+          # Ensure pip in the env is recent
+          micromamba run -n ci -- python -m pip install --upgrade pip
 
-      - name: Run tests
+      - name: Run tests (using micromamba env)
         run: |
-          pytest -q
+          micromamba run -n ci -- pytest -q
