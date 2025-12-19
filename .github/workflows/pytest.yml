@@ -26,18 +26,23 @@ jobs:
           # Pillow is required by `pipelines.imagecodecs` during test collection.
           pip install pytest psutil pillow
 
-      - name: Setup micromamba
-        uses: mamba-org/micromamba-action@v1
+      - name: Setup Miniconda (use mamba)
+        uses: conda-incubator/setup-miniconda@v2
         with:
-          channels: "conda-forge"
+          python-version: ${{ matrix.python-version }}
+          use-mamba: true
+          channels: conda-forge
+          auto-activate-base: false
 
       - name: Create conda env with rasterio (conda-forge)
         run: |
           # Create a short-lived env 'ci' containing rasterio and runtime deps
-          micromamba create -n ci -c conda-forge -y python=${{ matrix.python-version }} \ 
+          conda create -n ci -y -c conda-forge python=${{ matrix.python-version }} \
             rasterio numpy mercantile pmtiles imagecodecs
-          # Ensure pip in the env is recent
-          micromamba run -n ci -- python -m pip install --upgrade pip
+          # Activate and ensure pip is recent
+          . /opt/conda/etc/profile.d/conda.sh
+          conda activate ci
+          python -m pip install --upgrade pip
 
       - name: Run tests (using micromamba env)
         run: |
