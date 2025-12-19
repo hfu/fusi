@@ -35,10 +35,19 @@ try:
 except Exception:  # pragma: no cover - optional
     mercantile = None
 import numpy as np
-import rasterio
-from rasterio.enums import Resampling
-from rasterio.transform import from_bounds as transform_from_bounds
-from rasterio.warp import transform_bounds, reproject
+try:
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.transform import from_bounds as transform_from_bounds
+    from rasterio.warp import transform_bounds, reproject
+    RASTERIO_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dependency
+    rasterio = None
+    Resampling = None
+    transform_from_bounds = None
+    transform_bounds = None
+    reproject = None
+    RASTERIO_AVAILABLE = False
 
 from . import imagecodecs
 import shutil
