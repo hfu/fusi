@@ -238,6 +238,37 @@ show-split-patterns:
     @echo ""
     @pipenv run python pipelines/zoom_split_config.py --pattern balanced
     @echo ""
+
+# 14. Pixel-wise PMTiles merge (direct)
+pixel-wise *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -- {{args}}
+    if [ "$#" -lt 2 ]; then
+        echo "Usage: just pixel-wise <input1.mbtiles> <input2.mbtiles> ... -o output/fusi.pmtiles"
+        exit 1
+    fi
+
+    mkdir -p {{output_dir}}
+    TMP_CLEANUP=0
+    if [ -z "${TMPDIR:-}" ]; then
+        TMPDIR=$(mktemp -d "{{output_dir}}/tmp.XXXXXX")
+        TMP_CLEANUP=1
+    fi
+    export TMPDIR
+    chmod 700 "$TMPDIR"
+    export GDAL_CACHEMAX="${GDAL_CACHEMAX:-512}"
+    trap 'if [ "$TMP_CLEANUP" -eq 1 ]; then rm -rf "$TMPDIR"; fi' EXIT
+
+    # If first arg looks like an MBTiles file, delegate to pixelwise merge directly.
+    first="$1"
+    if [[ "$first" == *.mbtiles || -f "$first" ]]; then
+        pipenv run python -u -m pipelines.merge_pmtiles_pixelwise --mode priority --verbose "$@"
+    else
+        # Otherwise treat args as source names and run hybrid wrapper
+        pipenv run bash scripts/pixelwise_hybrid.sh --mode priority "$@"
+    fi
+
     @echo "Other patterns: safe, fast, incremental, single"
     @echo "Use: pipenv run python pipelines/zoom_split_config.py --pattern <name>"
 
